@@ -304,6 +304,39 @@ export function useRouting({
     });
   }
 
+  function ensureEndpointMarker({
+    currentMarker,
+    position,
+    icon,
+    title,
+    onDragEnd,
+  }) {
+    if (!position) return currentMarker;
+
+    if (!currentMarker) {
+      const marker = new window.google.maps.Marker({
+        map,
+        position,
+        draggable: true,
+        zIndex: 999990,
+        icon,
+        title,
+      });
+
+      marker.addListener("dragend", async (e) => {
+        const ll = toLatLngLiteral(e?.latLng);
+        if (!ll) return;
+        await onDragEnd(ll);
+      });
+
+      return marker;
+    }
+
+    currentMarker.setPosition(position);
+    currentMarker.setIcon(icon);
+    return currentMarker;
+  }
+
   function syncMarkersFromRoute(route) {
     if (!map) return;
 
@@ -319,67 +352,41 @@ export function useRouting({
     const endPos = toLatLngLiteral(legs[legs.length - 1]?.end_location);
 
     // START marker
-    if (startPos) {
-      if (!markersRef.current.start) {
-        markersRef.current.start = new window.google.maps.Marker({
-          map,
-          position: startPos,
-          draggable: true,
-          zIndex: 999990,
-          icon: icons.start,
-          title: "Start",
+    markersRef.current.start = ensureEndpointMarker({
+      currentMarker: markersRef.current.start,
+      position: startPos,
+      icon: icons.start,
+      title: "Start",
+      onDragEnd: async (ll) => {
+        markFromPicked?.();
+        setOrigin(ll);
+        populatePlacePickerFromLatLng(originPickerRef.current, ll);
+
+        await buildRoute({
+          originOverride: ll,
+          alternatives: true,
+          fitToRoutes: true,
         });
-
-        markersRef.current.start.addListener("dragend", async (e) => {
-          const ll = toLatLngLiteral(e?.latLng);
-          if (!ll) return;
-
-          markFromPicked?.();
-          setOrigin(ll);
-          populatePlacePickerFromLatLng(originPickerRef.current, ll);
-
-          await buildRoute({
-            originOverride: ll,
-            alternatives: true,
-            fitToRoutes: true,
-          });
-        });
-      } else {
-        markersRef.current.start.setPosition(startPos);
-        markersRef.current.start.setIcon(icons.start);
-      }
-    }
+      },
+    });
 
     // END marker
-    if (endPos) {
-      if (!markersRef.current.end) {
-        markersRef.current.end = new window.google.maps.Marker({
-          map,
-          position: endPos,
-          draggable: true,
-          zIndex: 999990,
-          icon: icons.end,
-          title: "Destination",
+    markersRef.current.end = ensureEndpointMarker({
+      currentMarker: markersRef.current.end,
+      position: endPos,
+      icon: icons.end,
+      title: "Destination",
+      onDragEnd: async (ll) => {
+        setDestination(ll);
+        populatePlacePickerFromLatLng(destPickerRef.current, ll);
+
+        await buildRoute({
+          destinationOverride: ll,
+          alternatives: true,
+          fitToRoutes: true,
         });
-
-        markersRef.current.end.addListener("dragend", async (e) => {
-          const ll = toLatLngLiteral(e?.latLng);
-          if (!ll) return;
-
-          setDestination(ll);
-          populatePlacePickerFromLatLng(destPickerRef.current, ll);
-
-          await buildRoute({
-            destinationOverride: ll,
-            alternatives: true,
-            fitToRoutes: true,
-          });
-        });
-      } else {
-        markersRef.current.end.setPosition(endPos);
-        markersRef.current.end.setIcon(icons.end);
-      }
-    }
+      },
+    });
 
     // DETOUR markers
     const viaPts = extractViaPointsFromRoute(route);

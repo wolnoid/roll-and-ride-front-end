@@ -1,10 +1,12 @@
-// src/maps/directionsUtils.js
-
 export function toLatLngLiteral(ll) {
   if (!ll) return null;
   if (typeof ll.lat === "function") return { lat: ll.lat(), lng: ll.lng() };
   if (Number.isFinite(ll.lat) && Number.isFinite(ll.lng)) return ll;
   return null;
+}
+
+export function placeToLatLng(place) {
+  return toLatLngLiteral(place?.location);
 }
 
 export function extractViaPointsFromRoute(route) {
