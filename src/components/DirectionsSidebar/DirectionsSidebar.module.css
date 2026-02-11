@@ -1,0 +1,124 @@
+.sidebar {
+  width: 340px;
+  flex: 0 0 340px;
+  border-right: 1px solid rgba(0, 0, 0, 0.12);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.sidebarHeader {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.hint {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.select {
+  height: 32px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.primaryBtn {
+  height: 34px;
+  padding: 0 10px;
+}
+
+.secondaryBtn {
+  height: 34px;
+  padding: 0 10px;
+}
+
+.panel {
+  flex: 1 1 auto;
+  overflow: auto;
+  border-top: 1px solid rgba(0, 0, 0, 0.12);
+  padding-top: 10px;
+}
+
+.routes {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.routesTitle {
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  opacity: 0.85;
+}
+
+.routeRow {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.routeRow:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.routeRadio {
+  margin-top: 2px;
+}
+
+.routeText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.routeMain {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.routeSub {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.labelRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.markerIconStart {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.markerIconEnd {
+  width: 16px;
+  height: 22px;
+  display: block;
+  margin-top: -2px; /* visually centers the pin with the text */
+}

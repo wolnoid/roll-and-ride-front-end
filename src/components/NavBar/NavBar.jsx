@@ -17,17 +17,13 @@ const NavBar = () => {
       <Link to='/'><img src={Logo} alt='A cute owl' /></Link>
       {user ? (
         <ul>
-          <li><Link to='/'>HOME</Link></li>
-          <li><Link to='/hoots'>HOOTS</Link></li>
-          {/* Add the NEW HOOT link */}
-          <li><Link to='/hoots/new'>NEW HOOT</Link></li>
+          <li><Link to='/'>My Profile</Link></li>
           <li><Link to='/' onClick={handleSignOut}>Sign Out</Link></li>
         </ul>
       ) : (
         <ul>
-          <li><Link to='/'>HOME</Link></li>
-          <li><Link to='/sign-in'>SIGN IN</Link></li>
-          <li><Link to='/sign-up'>SIGN UP</Link></li>
+          <li><Link to='/sign-up'>Sign Up</Link></li>
+          <li><Link to='/sign-in'>Sign In</Link></li>
         </ul>
       )}
     </nav>
