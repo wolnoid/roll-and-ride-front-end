@@ -230,33 +230,105 @@ export function useRouting({
     const routes = fullDirections?.routes ?? [];
     if (routes.length <= 1) return;
 
-    // Purple-ish hue for alternates
+    // --- Styling for alternates ---
     const ALT_COLOR = "#A142F4";
     const ALT_OPACITY = 0.28;
     const ALT_WEIGHT = 7;
 
+    // --- Helpers to detect shared segments ---
+    // Quantize points so "same road" segments hash the same even with tiny float differences.
+    const Q = 1e5; // 1e-5 deg ~ ~1m in latitude; adjust to 1e4 if you find missed overlaps.
+
+    const qKey = (p) => {
+      const n = latLngToNums(p);
+      if (!n) return null;
+      return `${Math.round(n.lat * Q)},${Math.round(n.lng * Q)}`;
+    };
+
+    // Undirected segment key (A->B same as B->A)
+    const segKey = (a, b) => {
+      const ka = qKey(a);
+      const kb = qKey(b);
+      if (!ka || !kb) return null;
+      return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+    };
+
+    const addSegments = (set, path) => {
+      for (let i = 0; i < path.length - 1; i++) {
+        const k = segKey(path[i], path[i + 1]);
+        if (k) set.add(k);
+      }
+    };
+
+    // Build continuous chunks of a route after removing:
+    // 1) any segment that overlaps primary route
+    // 2) any segment already drawn by another alternate (so overlapping alternates render once)
+    const buildVisibleChunks = (path, primarySegs, drawnAltSegs) => {
+      const chunks = [];
+      let chunk = [];
+
+      for (let i = 0; i < path.length - 1; i++) {
+        const a = path[i];
+        const b = path[i + 1];
+        const k = segKey(a, b);
+
+        if (chunk.length === 0) chunk.push(a);
+
+        const blocked =
+          !k || primarySegs.has(k) || drawnAltSegs.has(k);
+
+        if (blocked) {
+          if (chunk.length > 1) chunks.push(chunk);
+          chunk = [];
+          continue;
+        }
+
+        drawnAltSegs.add(k);
+        chunk.push(b);
+      }
+
+      if (chunk.length > 1) chunks.push(chunk);
+      return chunks;
+    };
+
+    // --- Compute primary route segments (so alternates don't draw over it) ---
+    const primaryRoute = routes[selectedIdx] ?? routes[0];
+    const primaryPath = primaryRoute?.overview_path ?? [];
+    const primarySegs = new Set();
+    addSegments(primarySegs, primaryPath);
+
+    // Track which alternate segments are already drawn (to prevent alt-on-alt dark overlaps)
+    const drawnAltSegs = new Set();
+
+    // --- Draw alternates with overlap masking ---
     routes.forEach((r, idx) => {
       if (idx === selectedIdx) return;
 
       const path = r?.overview_path;
       if (!path?.length) return;
 
-      const poly = new window.google.maps.Polyline({
-        map,
-        path,
-        clickable: true,
-        strokeColor: ALT_COLOR,
-        strokeOpacity: ALT_OPACITY,
-        strokeWeight: ALT_WEIGHT,
-        zIndex: 1,
-      });
+      const chunks = buildVisibleChunks(path, primarySegs, drawnAltSegs);
+      if (!chunks.length) return;
 
-      const listener = poly.addListener("click", () => {
-        selectRoute(idx);
-      });
+      chunks.forEach((chunkPath) => {
+        const poly = new window.google.maps.Polyline({
+          map,
+          path: chunkPath,
+          clickable: true,
+          strokeColor: ALT_COLOR,
+          strokeOpacity: ALT_OPACITY,
+          strokeWeight: ALT_WEIGHT,
+          // Keep alternates visually underneath the primary line
+          zIndex: 0,
+        });
 
-      altPolylinesRef.current.push(poly);
-      altPolylineListenersRef.current.push(listener);
+        const listener = poly.addListener("click", () => {
+          selectRoute(idx);
+        });
+
+        altPolylinesRef.current.push(poly);
+        altPolylineListenersRef.current.push(listener);
+      });
     });
   }
 

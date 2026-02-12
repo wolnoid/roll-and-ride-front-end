@@ -30,25 +30,56 @@ export function isSkateOn(combo) {
  * - same for SKATE
  */
 export function nextCombo(current, clicked) {
+  const transit = isTransitOn(current);
+  const bike = isBikeOn(current);
+  const skate = isSkateOn(current);
+
+  const resolve = (t, b, s) => {
+    // enforce last-mile exclusivity (bike OR skate)
+    if (b && s) s = false;
+
+    if (t) {
+      if (b) return ROUTE_COMBO.TRANSIT_BIKE;
+      if (s) return ROUTE_COMBO.TRANSIT_SKATE;
+      return ROUTE_COMBO.TRANSIT;
+    } else {
+      if (b) return ROUTE_COMBO.BIKE;
+      if (s) return ROUTE_COMBO.SKATE;
+      // safety: never allow "no mode"
+      return ROUTE_COMBO.TRANSIT;
+    }
+  };
+
   if (clicked === "TRANSIT") {
-    if (current === ROUTE_COMBO.TRANSIT_BIKE) return ROUTE_COMBO.BIKE;
-    if (current === ROUTE_COMBO.TRANSIT_SKATE) return ROUTE_COMBO.SKATE;
-    if (current === ROUTE_COMBO.BIKE) return ROUTE_COMBO.TRANSIT_BIKE;
-    if (current === ROUTE_COMBO.SKATE) return ROUTE_COMBO.TRANSIT_SKATE;
-    return ROUTE_COMBO.TRANSIT;
+    const nextTransit = !transit;
+
+    // Don't allow turning off the last active mode.
+    if (!nextTransit && !bike && !skate) return ROUTE_COMBO.TRANSIT;
+
+    return resolve(nextTransit, bike, skate);
   }
 
   if (clicked === "BIKE") {
-    if (current === ROUTE_COMBO.BIKE) return ROUTE_COMBO.TRANSIT_BIKE;
-    if (current === ROUTE_COMBO.TRANSIT_BIKE) return ROUTE_COMBO.BIKE;
-    return ROUTE_COMBO.TRANSIT_BIKE; // from TRANSIT or SKATE states
+    // Bike toggle should NOT force transit on.
+    // If skate is on, switch to bike (skate off).
+    const nextBike = bike ? false : true;
+    const nextSkate = false;
+
+    // If transit is off and bike is the only active mode, don't allow turning it off.
+    if (!transit && bike && !skate) return ROUTE_COMBO.BIKE;
+
+    return resolve(transit, nextBike, nextSkate);
   }
 
   if (clicked === "SKATE") {
-    if (current === ROUTE_COMBO.SKATE) return ROUTE_COMBO.TRANSIT_SKATE;
-    if (current === ROUTE_COMBO.TRANSIT_SKATE) return ROUTE_COMBO.SKATE;
-    return ROUTE_COMBO.TRANSIT_SKATE;
+    const nextSkate = skate ? false : true;
+    const nextBike = false;
+
+    if (!transit && skate && !bike) return ROUTE_COMBO.SKATE;
+
+    return resolve(transit, nextBike, nextSkate);
   }
 
   return current;
 }
+

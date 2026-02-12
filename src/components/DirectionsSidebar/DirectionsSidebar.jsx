@@ -1,9 +1,97 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import styles from "./DirectionsSidebar.module.css";
 import { getStartIconUrl, getEndIconUrl } from "../../maps/markerIconSvgs";
 import { placeToLatLng } from "../../maps/directionsUtils";
 import { usePlacePickerChange } from "../../hooks/usePlacePickerChange";
+import { populatePlacePickerFromLatLng, forcePickerText } from "../../maps/placePicker";
 import { isTransitOn, isBikeOn, isSkateOn, nextCombo } from "../../routing/routeCombos";
+
+const LS_KEY = "carpool.sidebarCollapsed";
+
+function ChevronLeftIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <path
+        d="M14.5 5.5L8 12l6.5 6.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function ChevronRightIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <path
+        d="M9.5 5.5L16 12l-6.5 6.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function SwapIcon() {
+  const stroke = 3;     // thicker
+  const stagger = 2.5;    // more vertical stagger
+  const xLeft = 6.25;      // further left (more horizontal separation)
+  const xRight = 17.75;    // further right
+
+  const yTop = 4.2;       // keep a little margin so caps don't touch the circle
+  const yBottom = 19.8;
+
+  const head = 4;       // arrowhead size
+  const headInset = 4;  // how "wide" the head spreads
+
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      {/* Up arrow (left) — nudged UP */}
+      <g transform={`translate(0,${-stagger})`}>
+        <path
+          d={`M${xLeft} ${yBottom} V${yTop}`}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={stroke}
+          strokeLinecap="round"
+        />
+        <path
+          d={`M${xLeft} ${yTop} L${xLeft - headInset} ${yTop + head} M${xLeft} ${yTop} L${xLeft + headInset} ${yTop + head}`}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={stroke}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </g>
+
+      {/* Down arrow (right) — nudged DOWN */}
+      <g transform={`translate(0,${stagger})`}>
+        <path
+          d={`M${xRight} ${yTop} V${yBottom}`}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={stroke}
+          strokeLinecap="round"
+        />
+        <path
+          d={`M${xRight} ${yBottom} L${xRight - headInset} ${yBottom - head} M${xRight} ${yBottom} L${xRight + headInset} ${yBottom - head}`}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={stroke}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </g>
+    </svg>
+  );
+}
 
 export default function DirectionsSidebar({
   canRenderMap,
@@ -15,7 +103,7 @@ export default function DirectionsSidebar({
   routeCombo,
   setRouteCombo,
 
-  hillWeight,        // 0..1
+  hillWeight,
   setHillWeight,
 
   onBuildRoute,
@@ -30,7 +118,6 @@ export default function DirectionsSidebar({
   selectedRouteIndex = 0,
   onSelectRoute,
 
-  // Optional: if your “smart routing” returns a segment summary, show it here.
   selectedSegments = null,
   showGooglePanel = true,
 }) {
@@ -39,6 +126,22 @@ export default function DirectionsSidebar({
 
   const originRef = originPickerRef ?? internalOriginRef;
   const destRef = destPickerRef ?? internalDestRef;
+
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return window.localStorage?.getItem(LS_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage?.setItem(LS_KEY, collapsed ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [collapsed]);
 
   const startIconUrl = getStartIconUrl();
   const endIconUrl = getEndIconUrl();
@@ -84,120 +187,191 @@ export default function DirectionsSidebar({
   const bikeOn = isBikeOn(routeCombo);
   const skateOn = isSkateOn(routeCombo);
 
+  const handleSwap = useCallback(async () => {
+    const originPlace = originRef.current?.value ?? null;
+    const destPlace = destRef.current?.value ?? null;
+
+    const currentOriginLL = placeToLatLng(originPlace) ?? userLoc ?? null;
+    const currentDestLL = destination ?? placeToLatLng(destPlace) ?? null;
+
+    if (!currentDestLL) return;
+
+    setOrigin(currentDestLL);
+    if (currentOriginLL) setDestination(currentOriginLL);
+    else setDestination(null);
+
+    if (originRef.current) {
+      await populatePlacePickerFromLatLng(originRef.current, currentDestLL);
+    }
+    if (destRef.current) {
+      if (currentOriginLL) await populatePlacePickerFromLatLng(destRef.current, currentOriginLL);
+      else forcePickerText(destRef.current, "");
+    }
+  }, [originRef, destRef, destination, setOrigin, setDestination, userLoc]);
+
   return (
-    <aside className={styles.sidebar}>
-      <div className={styles.sidebarHeader}>Directions</div>
+    <aside className={`${styles.sidebar} ${collapsed ? styles.sidebarCollapsed : ""}`}>
+      <button
+        type="button"
+        className={styles.collapseNub}
+        onClick={() => setCollapsed((c) => !c)}
+        aria-label={collapsed ? "Expand directions sidebar" : "Collapse directions sidebar"}
+        title={collapsed ? "Expand" : "Collapse"}
+      >
+        <span className={styles.collapseNubIcon} aria-hidden="true">
+          {collapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
+        </span>
+      </button>
 
-      <div className={styles.field}>
-        <div className={styles.labelRow}>
-          <img className={styles.markerIconStart} src={startIconUrl} alt="" aria-hidden="true" />
-          <div className={styles.label}>From</div>
-        </div>
+      <div className={styles.sidebarBody}>
+        <div className={styles.topControls}>
+          <div className={styles.modeBar}>
+            <div className={styles.modeRow}>
+              <button
+                type="button"
+                className={`${styles.modeBtn} ${transitOn ? styles.modeBtnOn : ""}`}
+                onClick={() => setRouteCombo((c) => nextCombo(c, "TRANSIT"))}
+                aria-pressed={transitOn}
+                aria-label="Transit"
+                title="Transit"
+              >
+                <span
+                  className={styles.modeEmoji}
+                  style={{ "--emoji-scale": 1.0, "--emoji-y": "0px" }}
+                  aria-hidden="true"
+                >
+                  🚉
+                </span>
+              </button>
 
-        <gmpx-place-picker ref={originRef} for-map="map" placeholder="Start location" />
+              <button
+                type="button"
+                className={`${styles.modeBtn} ${bikeOn ? styles.modeBtnOn : ""}`}
+                onClick={() => setRouteCombo((c) => nextCombo(c, "BIKE"))}
+                aria-pressed={bikeOn}
+                aria-label="Bike"
+                title="Bike"
+              >
+                <span
+                  className={styles.modeEmoji}
+                  style={{ "--emoji-scale": 1.18, "--emoji-y": "2px" }}
+                  aria-hidden="true"
+                >
+                  🚲
+                </span>
+              </button>
 
-        <div className={styles.hint}>
-          If you leave this blank, your current location is used (when available).
-        </div>
-      </div>
-
-      <div className={styles.field}>
-        <div className={styles.labelRow}>
-          <img className={styles.markerIconEnd} src={endIconUrl} alt="" aria-hidden="true" />
-          <div className={styles.label}>To</div>
-        </div>
-
-        <gmpx-place-picker ref={destRef} for-map="map" placeholder="Destination" />
-      </div>
-
-      <div className={styles.field}>
-        <div className={styles.label}>Mode</div>
-        <div className={styles.modeRow}>
-          <button
-            type="button"
-            className={`${styles.modeBtn} ${transitOn ? styles.modeBtnOn : ""}`}
-            onClick={() => setRouteCombo((c) => nextCombo(c, "TRANSIT"))}
-          >
-            Transit
-          </button>
-          <button
-            type="button"
-            className={`${styles.modeBtn} ${bikeOn ? styles.modeBtnOn : ""}`}
-            onClick={() => setRouteCombo((c) => nextCombo(c, "BIKE"))}
-          >
-            Bike
-          </button>
-          <button
-            type="button"
-            className={`${styles.modeBtn} ${skateOn ? styles.modeBtnOn : ""}`}
-            onClick={() => setRouteCombo((c) => nextCombo(c, "SKATE"))}
-          >
-            Skateboard
-          </button>
-        </div>
-      </div>
-
-      <div className={styles.field}>
-        <div className={styles.labelRow}>
-          <div className={styles.label}>Avoid hills</div>
-          <div className={styles.hillValue}>{Math.round(hillWeight * 100)}</div>
-        </div>
-        <input
-          className={styles.slider}
-          type="range"
-          min="0"
-          max="100"
-          value={Math.round(hillWeight * 100)}
-          onChange={(e) => setHillWeight(Number(e.target.value) / 100)}
-        />
-        <div className={styles.hint}>0 = fastest, 100 = strongly prefers flatter cycling legs.</div>
-      </div>
-
-      {showRoutes && (
-        <div className={styles.routes}>
-          <div className={styles.routesTitle}>Routes</div>
-          {routeOptions.map((r) => (
-            <label key={r.index} className={styles.routeRow}>
-              <input
-                className={styles.routeRadio}
-                type="radio"
-                name="route"
-                checked={selectedRouteIndex === r.index}
-                onChange={() => onSelectRoute(r.index)}
-              />
-              <div className={styles.routeText}>
-                <div className={styles.routeMain}>
-                  {r.durationText ? r.durationText : "—"}{" "}
-                  {r.distanceText ? `· ${r.distanceText}` : ""}
-                </div>
-                <div className={styles.routeSub}>{r.summary}</div>
-              </div>
-            </label>
-          ))}
-        </div>
-      )}
-
-      <div className={styles.actions}>
-        <button className={styles.primaryBtn} onClick={onBuildRoute} disabled={!destination}>
-          Get directions
-        </button>
-        <button className={styles.secondaryBtn} onClick={onClearRoute} type="button">
-          Clear
-        </button>
-      </div>
-
-      {selectedSegments && (
-        <div className={styles.segments}>
-          <div className={styles.routesTitle}>Itinerary</div>
-          {selectedSegments.map((s, i) => (
-            <div key={i} className={styles.segmentRow}>
-              <strong>{s.mode}</strong> · {s.durationText}
+              <button
+                type="button"
+                className={`${styles.modeBtn} ${skateOn ? styles.modeBtnOn : ""}`}
+                onClick={() => setRouteCombo((c) => nextCombo(c, "SKATE"))}
+                aria-pressed={skateOn}
+                aria-label="Skate"
+                title="Skate"
+              >
+                <span
+                  className={styles.modeEmoji}
+                  style={{ "--emoji-scale": 1.08, "--emoji-y": "1px" }}
+                  aria-hidden="true"
+                >
+                  🛹
+                </span>
+              </button>
             </div>
-          ))}
-        </div>
-      )}
+          </div>
 
-      {showGooglePanel && <div ref={directionsPanelRef} className={styles.panel} />}
+          <div className={styles.inputsCard}>
+            <div className={styles.inputRow}>
+              <img className={styles.inputMarker} src={startIconUrl} alt="" aria-hidden="true" />
+              <div className={styles.pickerWrap}>
+                <gmpx-place-picker ref={originRef} for-map="map" placeholder="Choose origin" />
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className={styles.swapBtn}
+              onClick={handleSwap}
+              aria-label="Swap origin and destination"
+              title="Swap"
+              disabled={!destination && !placeToLatLng(destRef.current?.value)}
+            >
+              <SwapIcon />
+            </button>
+
+            <div className={styles.inputRow}>
+              <img className={styles.inputMarker} src={endIconUrl} alt="" aria-hidden="true" />
+              <div className={styles.pickerWrap}>
+                <gmpx-place-picker ref={destRef} for-map="map" placeholder="Choose destination" />
+              </div>
+            </div>
+          </div>
+
+          <div className={styles.field}>
+            <div className={styles.labelRow}>
+              <div className={styles.label}>Avoid hills</div>
+              <div className={styles.hillValue}>{Math.round(hillWeight * 100)}</div>
+            </div>
+            <input
+              className={styles.slider}
+              type="range"
+              min="0"
+              max="100"
+              value={Math.round(hillWeight * 100)}
+              onChange={(e) => setHillWeight(Number(e.target.value) / 100)}
+            />
+            <div className={styles.hint}>0 = fastest, 100 = strongly prefers flatter cycling legs.</div>
+          </div>
+        </div>
+
+        <div className={styles.resultsScroll}>
+          {showRoutes && (
+            <div className={styles.routes}>
+              <div className={styles.routesTitle}>Routes</div>
+              {routeOptions.map((r) => (
+                <label key={r.index} className={styles.routeRow}>
+                  <input
+                    className={styles.routeRadio}
+                    type="radio"
+                    name="route"
+                    checked={selectedRouteIndex === r.index}
+                    onChange={() => onSelectRoute(r.index)}
+                  />
+                  <div className={styles.routeText}>
+                    <div className={styles.routeMain}>
+                      {r.durationText ? r.durationText : "—"}{" "}
+                      {r.distanceText ? `· ${r.distanceText}` : ""}
+                    </div>
+                    <div className={styles.routeSub}>{r.summary}</div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          )}
+
+          <div className={styles.actions}>
+            <button className={styles.primaryBtn} onClick={onBuildRoute} disabled={!destination} type="button">
+              Get directions
+            </button>
+            <button className={styles.secondaryBtn} onClick={onClearRoute} type="button">
+              Clear
+            </button>
+          </div>
+
+          {selectedSegments && (
+            <div className={styles.segments}>
+              <div className={styles.routesTitle}>Itinerary</div>
+              {selectedSegments.map((s, i) => (
+                <div key={i} className={styles.segmentRow}>
+                  <strong>{s.mode}</strong> · {s.durationText}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {showGooglePanel && <div ref={directionsPanelRef} className={styles.panel} />}
+        </div>
+      </div>
     </aside>
   );
 }

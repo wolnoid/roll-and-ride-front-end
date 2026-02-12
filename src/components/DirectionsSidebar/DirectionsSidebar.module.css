@@ -1,23 +1,316 @@
-.modeRow {
+/* ---- Layout / sizing ---- */
+.sidebar {
+  /* Narrower by default + never grow wider than this clamp */
+  --sidebar-w: 408px;
+
+  width: var(--sidebar-w);
+  min-width: var(--sidebar-w);
+  max-width: var(--sidebar-w);
+  flex: 0 0 var(--sidebar-w);
+
+  height: 100%;
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  position: relative;
+
+  border-right: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.96);
+
+  /* needs to be visible for the nub to stick out */
+  overflow: visible;
 }
 
-.modeBtn {
-  height: 32px;
-  padding: 0 10px;
+.sidebarBody {
+  flex: 1 1 auto;
+  min-height: 0;
+
+  /* we control scrolling inside resultsScroll */
+  overflow: hidden;
+
+  padding: 12px 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.topControls {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.resultsScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ---- Collapsed state ---- */
+.sidebarCollapsed {
+  --sidebar-w: 10px;
+}
+
+.sidebarCollapsed .sidebarHeader {
+  justify-content: center;
+  border-bottom: 0;
+}
+
+.sidebarCollapsed .sidebarTitle {
+  display: none;
+}
+
+.sidebarCollapsed .sidebarBody {
+  display: none;
+}
+
+/* ---- Collapse Button ---- */
+.collapseNub {
+  position: absolute;
+  top: 50%;
+  right: -18px; /* sticks out from sidebar edge */
+  transform: translateY(-50%);
+  z-index: 20;
+
+  width: 18px;
+  height: 70px;
+
+  padding: 0;
+  margin: 0;
+
+  border: 1px solid rgba(60, 64, 67, 0.22);
+  border-left: none; /* merges with sidebar edge */
+  border-radius: 0 14px 14px 0;
+
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 1px 2px rgba(60, 64, 67, 0.25);
+
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+
+  /* defeat any global button styles */
+  font-size: 0;
+  line-height: 0;
+}
+
+.collapseNub:hover {
+  background: rgb(233, 235, 238);
+}
+
+.collapseNubIcon {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  color: rgba(0, 0, 0, 0.72);
+}
+
+.collapseNubIcon svg {
+  display: block;
+}
+
+/* When collapsed, keep nub visible and align it to the thin rail edge */
+.sidebarCollapsed .collapseNub {
+  right: -18px;
+}
+
+.collapseBtn {
+  width: 30px;
+  height: 30px;
+
+  /* hard reset to defeat global button styles */
+  padding: 0;
+  margin: 0;
+  border: none;
+  font-size: 0;
+  line-height: 0;
+
+  display: grid;
+  place-items: center;
+
   border-radius: 999px;
-  border: 1px solid rgba(0, 0, 0, 0.2);
-  background: rgba(255, 255, 255, 0.8);
+  background: rgba(0, 0, 0, 0.06);
   cursor: pointer;
 }
 
-.modeBtnOn {
-  border-color: rgba(0, 0, 0, 0.45);
-  background: rgba(0, 0, 0, 0.08);
-  font-weight: 700;
+.collapseBtn:hover {
+  background: rgba(0, 0, 0, 0.12);
 }
 
+.collapseIcon {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  opacity: 0.9;
+}
+
+.collapseIcon svg {
+  display: block; /* kills SVG baseline weirdness */
+}
+
+/* ---- Form-ish UI ---- */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.labelRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.hint {
+  font-size: 12px;
+  opacity: 0.72;
+  line-height: 1.25;
+}
+
+.markerIconStart,
+.markerIconEnd {
+  width: 18px;
+  height: 18px;
+  opacity: 0.9;
+}
+
+/* Ensure place pickers fill our fixed-width sidebar */
+:global(gmpx-place-picker) {
+  display: block;
+  width: 100%;
+  height: 44px;
+  min-height: 44px;
+}
+
+/* ---- Mode buttons ---- */
+.modeBar {
+  margin-bottom: 8px;
+}
+
+.modeRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: nowrap; /* keep them in a row */
+}
+
+.modeBtn {
+  flex: 1 1 0;
+  height: 44px;
+  min-width: 0;
+
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 999px;
+
+  background: rgba(0, 0, 0, 0.04);
+  cursor: pointer;
+
+  display: grid;
+  place-items: center;
+
+  font-size: 32px;
+  color: rgba(0, 0, 0, 0.78);
+}
+
+.modeBtn:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.modeBtnOn {
+  background: rgba(26, 115, 232, 0.14);
+  color: rgb(26, 115, 232);
+}
+
+.modeBtn svg {
+  width: var(--mode-icon-size);
+  height: var(--mode-icon-size);
+  display: block;
+}
+
+/* ---- Inputs ---- */
+.inputsCard {
+  position: relative;
+
+  /* knobs */
+  --od-row-gap: 5px;      /* spacing between the two rows */
+  --od-row-pad-y: 0px;
+  --od-row-min-h: 44px;   /* your original row height (set to 44px to tighten) */
+}
+
+.inputRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+
+  min-height: var(--od-row-min-h);
+  padding: var(--od-row-pad-y) 44px var(--od-row-pad-y) 0px;
+}
+
+.inputsCard > .inputRow + .swapBtn + .inputRow {
+  margin-top: var(--od-row-gap);
+}
+
+.inputMarker {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  opacity: 0.92;
+}
+
+.pickerWrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+.swapBtn {
+  position: absolute;
+  right: 1px;
+  top: 50%;
+  transform: translateY(-50%);
+
+  width: 32px;
+  height: 32px;
+
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.5);
+  border-radius: 999px;
+
+  background: rgba(255, 255, 255, 0.98);
+
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.swapBtn:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.swapBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.swapBtn svg {
+  display: block;
+}
+
+/* ---- Slider ---- */
 .slider {
   width: 100%;
 }
@@ -28,6 +321,116 @@
   opacity: 0.8;
 }
 
+/* ---- Routes ---- */
+.routes {
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.65);
+
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.routesTitle {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.routeRow {
+  display: flex;
+  gap: 8px;
+  padding: 6px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.routeRow:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.routeRadio {
+  margin-top: 3px;
+}
+
+.routeText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.routeMain {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.routeSub {
+  font-size: 12px;
+  opacity: 0.8;
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Actions ---- */
+.actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.primaryBtn {
+  flex: 1 1 auto;
+  padding: 12px;
+
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+
+  background: var(--primary);
+  color: white;
+  font-weight: 800;
+}
+
+.primaryBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.secondaryBtn {
+  flex: 0 0 auto;
+  height: 42px;
+  padding: 0 12px;
+  min-width: 84px;
+
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  background: rgba(255, 255, 255, 0.8);
+  font-weight: 800;
+
+  white-space: nowrap;
+}
+
+/* Force the Clear button to be a fixed, non-stretching size even if global button styles exist */
+.actions .secondaryBtn {
+  flex: 0 0 92px;
+  width: 92px;
+  padding: 0;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Make the primary button match height so the row looks clean */
+.actions .primaryBtn {
+  height: 42px;
+  padding: 0 12px;
+}
+
+/* ---- Optional itinerary ---- */
 .segments {
   padding: 10px;
   border-radius: 10px;
@@ -40,3 +443,35 @@
   padding: 4px 0;
   opacity: 0.9;
 }
+
+/* ---- Google Directions panel ---- */
+.panel {
+  flex: 1 1 auto;
+  min-height: 180px;
+  min-width: 0;
+
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.65);
+
+  overflow: auto;
+}
+
+/* ---- Responsive ---- */
+@media (max-width: 900px) {
+  .sidebar {
+    --sidebar-w: clamp(240px, 55vw, 320px);
+  }
+}
+
+@media (max-width: 360px) {
+  .modeRow {
+    flex-wrap: wrap;
+  }
+
+  .modeBtn {
+    flex: 1 1 45%;
+  }
+}
+
