@@ -3,8 +3,16 @@ import styles from "./DirectionsSidebar.module.css";
 import { getStartIconUrl, getEndIconUrl } from "../../maps/markerIconSvgs";
 import { placeToLatLng } from "../../maps/directionsUtils";
 import { usePlacePickerChange } from "../../hooks/usePlacePickerChange";
-import { populatePlacePickerFromLatLng, forcePickerText } from "../../maps/placePicker";
-import { isTransitOn, isBikeOn, isSkateOn, nextCombo } from "../../routing/routeCombos";
+import {
+  populatePlacePickerFromLatLng,
+  forcePickerText,
+} from "../../maps/placePicker";
+import {
+  isTransitOn,
+  isBikeOn,
+  isSkateOn,
+  nextCombo,
+} from "../../routing/routeCombos";
 
 const LS_KEY = "carpool.sidebarCollapsed";
 
@@ -39,16 +47,16 @@ function ChevronRightIcon() {
 }
 
 function SwapIcon() {
-  const stroke = 3;     // thicker
-  const stagger = 2.5;    // more vertical stagger
-  const xLeft = 6.25;      // further left (more horizontal separation)
-  const xRight = 17.75;    // further right
+  const stroke = 3; // thicker
+  const stagger = 2.5; // more vertical stagger
+  const xLeft = 6.25; // further left (more horizontal separation)
+  const xRight = 17.75; // further right
 
-  const yTop = 4.2;       // keep a little margin so caps don't touch the circle
+  const yTop = 4.2; // keep a little margin so caps don't touch the circle
   const yBottom = 19.8;
 
-  const head = 4;       // arrowhead size
-  const headInset = 4;  // how "wide" the head spreads
+  const head = 4; // arrowhead size
+  const headInset = 4; // how "wide" the head spreads
 
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
@@ -106,10 +114,17 @@ export default function DirectionsSidebar({
   hillWeight,
   setHillWeight,
 
+  // transit time props from Landing
+  timeKind,
+  setTimeKind,
+  timeValue,
+  setTimeValue,
+
   onBuildRoute,
   onClearRoute,
 
   directionsPanelRef,
+  directionsDirty = true,
 
   originPickerRef,
   destPickerRef,
@@ -181,7 +196,8 @@ export default function DirectionsSidebar({
   usePlacePickerChange(originRef, canRenderMap, handleOriginPlaceChange);
   usePlacePickerChange(destRef, canRenderMap, handleDestPlaceChange);
 
-  const showRoutes = routeOptions?.length > 1 && typeof onSelectRoute === "function";
+  const showRoutes =
+    routeOptions?.length > 1 && typeof onSelectRoute === "function";
 
   const transitOn = isTransitOn(routeCombo);
   const bikeOn = isBikeOn(routeCombo);
@@ -204,10 +220,45 @@ export default function DirectionsSidebar({
       await populatePlacePickerFromLatLng(originRef.current, currentDestLL);
     }
     if (destRef.current) {
-      if (currentOriginLL) await populatePlacePickerFromLatLng(destRef.current, currentOriginLL);
+      if (currentOriginLL)
+        await populatePlacePickerFromLatLng(destRef.current, currentOriginLL);
       else forcePickerText(destRef.current, "");
     }
   }, [originRef, destRef, destination, setOrigin, setDestination, userLoc]);
+
+  // Keep the visible datetime box set to “now” when Leave now is selected.
+  useEffect(() => {
+    if (timeKind === "NOW") {
+      setTimeValue(new Date());
+    }
+  }, [timeKind, setTimeValue]);
+
+  // --- datetime-local helpers (local timezone, matches browser behavior) ---
+  function toDatetimeLocalValue(d) {
+    if (!(d instanceof Date) || Number.isNaN(d.getTime())) return "";
+    const pad = (n) => String(n).padStart(2, "0");
+
+    const yyyy = d.getFullYear();
+    const mm = pad(d.getMonth() + 1);
+    const dd = pad(d.getDate());
+    const hh = pad(d.getHours());
+    const min = pad(d.getMinutes());
+
+    return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+  }
+
+  function fromDatetimeLocalValue(s) {
+    if (!s) return null;
+    const [datePart, timePart] = s.split("T");
+    if (!datePart || !timePart) return null;
+
+    const [y, m, d] = datePart.split("-").map(Number);
+    const [hh, mm] = timePart.split(":").map(Number);
+
+    if (![y, m, d, hh, mm].every(Number.isFinite)) return null;
+
+    return new Date(y, m - 1, d, hh, mm, 0, 0);
+  }
 
   return (
     <aside className={`${styles.sidebar} ${collapsed ? styles.sidebarCollapsed : ""}`}>
@@ -307,6 +358,51 @@ export default function DirectionsSidebar({
             </div>
           </div>
 
+          {/* ---- Transit time options (below inputs, above hills) ---- */}
+          <div className={styles.field}>
+            <div className={styles.timeRow}>
+              <select
+                className={styles.timeSelect}
+                value={timeKind}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setTimeKind(next);
+
+                  // Seed a sensible value if switching away from NOW and current value is invalid.
+                  if (
+                    next !== "NOW" &&
+                    (!(timeValue instanceof Date) || Number.isNaN(timeValue.getTime()))
+                  ) {
+                    setTimeValue(new Date());
+                  }
+
+                  // If switching to NOW, the effect above will set timeValue to current time.
+                }}
+                disabled={!transitOn}
+              >
+                <option value="NOW">Leave now</option>
+                <option value="DEPART_AT">Depart at</option>
+                <option value="ARRIVE_BY">Arrive by</option>
+              </select>
+
+              <input
+                className={styles.timeInput}
+                type="datetime-local"
+                value={toDatetimeLocalValue(timeValue)}
+                onChange={(e) => {
+                  const d = fromDatetimeLocalValue(e.target.value);
+                  if (d) setTimeValue(d);
+                }}
+                disabled={!transitOn || timeKind === "NOW"}
+                title={
+                  timeKind === "NOW"
+                    ? "Current time (Leave now)"
+                    : "Select date and time"
+                }
+              />
+            </div>
+          </div>
+
           <div className={styles.field}>
             <div className={styles.labelRow}>
               <div className={styles.label}>Avoid hills</div>
@@ -350,7 +446,12 @@ export default function DirectionsSidebar({
           )}
 
           <div className={styles.actions}>
-            <button className={styles.primaryBtn} onClick={onBuildRoute} disabled={!destination} type="button">
+            <button
+              className={`${styles.primaryBtn} ${!directionsDirty ? styles.primaryBtnDrained : ""}`}
+              onClick={onBuildRoute}
+              disabled={!destination}
+              type="button"
+            >
               Get directions
             </button>
             <button className={styles.secondaryBtn} onClick={onClearRoute} type="button">

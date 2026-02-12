@@ -47,6 +47,7 @@ export function useRouting({
   destinationRef,
   travelModeRef,
   userLocRef,
+  transitTimeRef,
 
   setOrigin,
   setDestination,
@@ -236,8 +237,7 @@ export function useRouting({
     const ALT_WEIGHT = 7;
 
     // --- Helpers to detect shared segments ---
-    // Quantize points so "same road" segments hash the same even with tiny float differences.
-    const Q = 1e5; // 1e-5 deg ~ ~1m in latitude; adjust to 1e4 if you find missed overlaps.
+    const Q = 1e5;
 
     const qKey = (p) => {
       const n = latLngToNums(p);
@@ -245,7 +245,6 @@ export function useRouting({
       return `${Math.round(n.lat * Q)},${Math.round(n.lng * Q)}`;
     };
 
-    // Undirected segment key (A->B same as B->A)
     const segKey = (a, b) => {
       const ka = qKey(a);
       const kb = qKey(b);
@@ -260,9 +259,6 @@ export function useRouting({
       }
     };
 
-    // Build continuous chunks of a route after removing:
-    // 1) any segment that overlaps primary route
-    // 2) any segment already drawn by another alternate (so overlapping alternates render once)
     const buildVisibleChunks = (path, primarySegs, drawnAltSegs) => {
       const chunks = [];
       let chunk = [];
@@ -274,8 +270,7 @@ export function useRouting({
 
         if (chunk.length === 0) chunk.push(a);
 
-        const blocked =
-          !k || primarySegs.has(k) || drawnAltSegs.has(k);
+        const blocked = !k || primarySegs.has(k) || drawnAltSegs.has(k);
 
         if (blocked) {
           if (chunk.length > 1) chunks.push(chunk);
@@ -291,16 +286,13 @@ export function useRouting({
       return chunks;
     };
 
-    // --- Compute primary route segments (so alternates don't draw over it) ---
     const primaryRoute = routes[selectedIdx] ?? routes[0];
     const primaryPath = primaryRoute?.overview_path ?? [];
     const primarySegs = new Set();
     addSegments(primarySegs, primaryPath);
 
-    // Track which alternate segments are already drawn (to prevent alt-on-alt dark overlaps)
     const drawnAltSegs = new Set();
 
-    // --- Draw alternates with overlap masking ---
     routes.forEach((r, idx) => {
       if (idx === selectedIdx) return;
 
@@ -318,7 +310,6 @@ export function useRouting({
           strokeColor: ALT_COLOR,
           strokeOpacity: ALT_OPACITY,
           strokeWeight: ALT_WEIGHT,
-          // Keep alternates visually underneath the primary line
           zIndex: 0,
         });
 
@@ -332,13 +323,7 @@ export function useRouting({
     });
   }
 
-  function ensureEndpointMarker({
-    currentMarker,
-    position,
-    icon,
-    title,
-    onDragEnd,
-  }) {
+  function ensureEndpointMarker({ currentMarker, position, icon, title, onDragEnd }) {
     if (!position) return currentMarker;
 
     if (!currentMarker) {
@@ -379,7 +364,6 @@ export function useRouting({
     const startPos = toLatLngLiteral(legs[0]?.start_location);
     const endPos = toLatLngLiteral(legs[legs.length - 1]?.end_location);
 
-    // START marker
     markersRef.current.start = ensureEndpointMarker({
       currentMarker: markersRef.current.start,
       position: startPos,
@@ -398,7 +382,6 @@ export function useRouting({
       },
     });
 
-    // END marker
     markersRef.current.end = ensureEndpointMarker({
       currentMarker: markersRef.current.end,
       position: endPos,
@@ -416,7 +399,6 @@ export function useRouting({
       },
     });
 
-    // DETOUR markers
     const viaPts = extractViaPointsFromRoute(route);
     viaPointsRef.current = viaPts;
 
@@ -504,6 +486,20 @@ export function useRouting({
       provideRouteAlternatives: Boolean(alternatives),
     };
 
+    // ✅ Transit depart/arrive time support
+    if ((req.travelMode ?? "TRANSIT") === "TRANSIT") {
+      const t = transitTimeRef?.current; // { kind: "NOW"|"DEPART_AT"|"ARRIVE_BY", date: Date|null }
+      const dt =
+        t?.date instanceof Date && !Number.isNaN(t.date.getTime()) ? t.date : null;
+
+      if (t?.kind === "ARRIVE_BY" && dt) {
+        req.transitOptions = { arrivalTime: dt };
+      } else if (t?.kind === "DEPART_AT" && dt) {
+        req.transitOptions = { departureTime: dt };
+      }
+      // "NOW" => omit transitOptions (defaults to now)
+    }
+
     if (viaPts?.length) {
       req.waypoints = viaPts.map((p) => ({ location: p, stopover: false }));
       req.optimizeWaypoints = false;
@@ -526,7 +522,6 @@ export function useRouting({
         drawAlternatePolylines(result, idx);
 
         if (fitToRoutes) {
-          // Wait for layout to settle (helps after resizing window / split-screen)
           requestAnimationFrame(() => {
             requestAnimationFrame(() => {
               fitAllRoutesInView(result, idx);
@@ -595,8 +590,6 @@ export function useRouting({
         draggable: true,
         suppressMarkers: true,
         hideRouteList: true,
-
-        // Prevent renderer from auto-fitting viewport to the primary route
         preserveViewport: true,
       });
 
@@ -609,7 +602,6 @@ export function useRouting({
         const route = dir?.routes?.[0];
         if (!route) return;
 
-        // User dragging/editing invalidates alternatives
         if (fullDirectionsRef.current) {
           clearAlternativesState();
         }

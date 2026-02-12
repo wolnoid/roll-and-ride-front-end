@@ -1,5 +1,5 @@
 // src/components/Landing/Landing.jsx
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import styles from "./Landing.module.css";
 import DirectionsSidebar from "../DirectionsSidebar/DirectionsSidebar.jsx";
 import { useGoogleMapsReady } from "../../hooks/useGoogleMapsReady";
@@ -12,6 +12,7 @@ import { useRouting } from "../../hooks/useRouting";
 import { ROUTE_COMBO } from "../../routing/routeCombos";
 
 import { populatePlacePickerFromLatLng } from "../../maps/placePicker";
+import { toLatLngLiteral } from "../../maps/directionsUtils";
 
 const FALLBACK_CENTER = { lat: 40.749933, lng: -73.98633 };
 
@@ -34,6 +35,51 @@ export default function Landing() {
   const [routeCombo, setRouteCombo] = useState(ROUTE_COMBO.TRANSIT);
   const [hillWeight, setHillWeight] = useState(0);
 
+  // ✅ Transit time controls
+  // "NOW" | "DEPART_AT" | "ARRIVE_BY"
+  const [timeKind, setTimeKind] = useState("NOW");
+  const [timeValue, setTimeValue] = useState(() => new Date());
+
+  // Tracks last directions request signature so we can “drain” the button until inputs change.
+  const [lastQueryKey, setLastQueryKey] = useState("");
+
+  const travelModeForCombo = useMemo(() => {
+    switch (routeCombo) {
+      case ROUTE_COMBO.BIKE:
+        return "BICYCLING";
+      case ROUTE_COMBO.SKATE:
+        return "WALKING"; // temporary until skateboard timing override exists
+      default:
+        return "TRANSIT";
+    }
+  }, [routeCombo]);
+
+  const llKey = (ll) => {
+    const p = toLatLngLiteral(ll);
+    return p ? `${p.lat.toFixed(6)},${p.lng.toFixed(6)}` : "none";
+  };
+
+  const computeQueryKey = useMemo(
+    () =>
+      ({ originOverride, destinationOverride } = {}) => {
+        const o = originOverride ?? origin ?? userLoc ?? FALLBACK_CENTER;
+        const d = destinationOverride ?? destination;
+
+        return [
+          `combo:${routeCombo}`,
+          `mode:${travelModeForCombo}`,
+          `o:${llKey(o)}`,
+          `d:${llKey(d)}`,
+          `hill:${Math.round(hillWeight * 100)}`,
+          `time:${timeKind}:${timeKind === "NOW" ? "now" : timeValue.toISOString()}`,
+        ].join("|");
+      },
+    [origin, destination, userLoc, routeCombo, travelModeForCombo, hillWeight, timeKind, timeValue]
+  );
+
+  const currentQueryKey = computeQueryKey();
+  const directionsDirty = Boolean(destination) && currentQueryKey !== lastQueryKey;
+
   // Default origin state to geolocation for routing (no UI fill on load)
   useEffect(() => {
     if (userLoc) setOrigin((prev) => prev ?? userLoc);
@@ -46,7 +92,7 @@ export default function Landing() {
   const routeComboRef = useRef(routeCombo);
   const hillWeightRef = useRef(hillWeight);
   const travelModeRef = useRef("TRANSIT");
-  
+
   useEffect(() => void (originRef.current = origin), [origin]);
   useEffect(() => void (destinationRef.current = destination), [destination]);
   useEffect(() => void (userLocRef.current = userLoc), [userLoc]);
@@ -54,18 +100,18 @@ export default function Landing() {
   useEffect(() => void (hillWeightRef.current = hillWeight), [hillWeight]);
 
   useEffect(() => {
-  switch (routeCombo) {
-    case ROUTE_COMBO.BIKE:
-      travelModeRef.current = "BICYCLING";
-      break;
-    case ROUTE_COMBO.SKATE:
-      travelModeRef.current = "WALKING"; // temporary until skateboard timing override exists
-      break;
-    default:
-      travelModeRef.current = "TRANSIT";
-      break;
-  }
-}, [routeCombo]);
+    travelModeRef.current = travelModeForCombo;
+  }, [travelModeForCombo]);
+
+  // ✅ transit time ref for routing
+  const transitTimeRef = useRef({ kind: "NOW", date: null });
+
+  useEffect(() => {
+    transitTimeRef.current = {
+      kind: timeKind,
+      date: timeKind === "NOW" ? null : timeValue,
+    };
+  }, [timeKind, timeValue]);
 
   // Set initial center on the web component itself
   useEffect(() => {
@@ -104,6 +150,7 @@ export default function Landing() {
     destinationRef,
     travelModeRef,
     userLocRef,
+    transitTimeRef,
 
     setOrigin,
     setDestination,
@@ -123,13 +170,15 @@ export default function Landing() {
   }
 
   async function onBuildRoute() {
-    const d = destinationRef.current;
+    const d = destination;
     if (!d) return;
 
-    // If From UI is blank and user didn’t pick a From, prefill with geolocation (when available)
     prefillFromUserLocationIfNeeded();
 
-    await routing.buildRoute({ alternatives: true });
+    // Drain immediately; re-arms once inputs change
+    setLastQueryKey(computeQueryKey());
+
+    await routing.buildRoute({ destinationOverride: d, alternatives: true });
   }
 
   function onClearRoute() {
@@ -139,11 +188,12 @@ export default function Landing() {
   async function directionsToHere(here) {
     setCtxMenu(null);
 
-    // If From is still blank/unpicked, prefill From with geolocation (only in this scenario)
     prefillFromUserLocationIfNeeded();
 
     setDestination(here);
     populatePlacePickerFromLatLng(destPickerRef.current, here);
+
+    setLastQueryKey(computeQueryKey({ destinationOverride: here }));
 
     await routing.buildRoute({
       destinationOverride: here,
@@ -160,6 +210,8 @@ export default function Landing() {
 
     const d = destinationRef.current;
     if (!d) return;
+
+    setLastQueryKey(computeQueryKey({ originOverride: here }));
 
     await routing.buildRoute({
       originOverride: here,
@@ -196,8 +248,13 @@ export default function Landing() {
             setRouteCombo={setRouteCombo}
             hillWeight={hillWeight}
             setHillWeight={setHillWeight}
+            timeKind={timeKind}
+            setTimeKind={setTimeKind}
+            timeValue={timeValue}
+            setTimeValue={setTimeValue}
             onBuildRoute={onBuildRoute}
             onClearRoute={onClearRoute}
+            directionsDirty={directionsDirty}
             directionsPanelRef={directionsPanelRef}
             originPickerRef={originPickerRef}
             destPickerRef={destPickerRef}

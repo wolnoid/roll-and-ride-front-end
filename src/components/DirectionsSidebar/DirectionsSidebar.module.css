@@ -16,6 +16,9 @@
   border-right: 1px solid rgba(0, 0, 0, 0.12);
   background: rgba(255, 255, 255, 0.96);
 
+  /* Match typical Google/Places typography */
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
   /* needs to be visible for the nub to stick out */
   overflow: visible;
 }
@@ -119,41 +122,6 @@
   right: -18px;
 }
 
-.collapseBtn {
-  width: 30px;
-  height: 30px;
-
-  /* hard reset to defeat global button styles */
-  padding: 0;
-  margin: 0;
-  border: none;
-  font-size: 0;
-  line-height: 0;
-
-  display: grid;
-  place-items: center;
-
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.06);
-  cursor: pointer;
-}
-
-.collapseBtn:hover {
-  background: rgba(0, 0, 0, 0.12);
-}
-
-.collapseIcon {
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  opacity: 0.9;
-}
-
-.collapseIcon svg {
-  display: block; /* kills SVG baseline weirdness */
-}
-
 /* ---- Form-ish UI ---- */
 .field {
   display: flex;
@@ -214,7 +182,7 @@
   border: none;
   border-radius: 999px;
 
-  background: rgba(0, 0, 0, 0.04);
+  background: rgba(0, 0, 0, 0.08);
   cursor: pointer;
 
   display: grid;
@@ -225,18 +193,21 @@
 }
 
 .modeBtn:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: rgba(0, 160, 223, 0.15);
 }
 
 .modeBtnOn {
-  background: rgba(26, 115, 232, 0.14);
-  color: rgb(26, 115, 232);
+  background: rgba(0, 160, 223, 0.4);
+  color: var(--primary);
+  font-weight: 700;
 }
 
-.modeBtn svg {
-  width: var(--mode-icon-size);
-  height: var(--mode-icon-size);
-  display: block;
+.modeBtnOn:hover {
+  background: rgba(0, 160, 223, 0.3);
+}
+
+.modeBtnOn:active {
+  background: rgba(0, 160, 223, 0.22);
 }
 
 /* ---- Inputs ---- */
@@ -244,9 +215,9 @@
   position: relative;
 
   /* knobs */
-  --od-row-gap: 5px;      /* spacing between the two rows */
+  --od-row-gap: 5px;
   --od-row-pad-y: 0px;
-  --od-row-min-h: 44px;   /* your original row height (set to 44px to tighten) */
+  --od-row-min-h: 44px;
 }
 
 .inputRow {
@@ -308,6 +279,53 @@
 
 .swapBtn svg {
   display: block;
+}
+
+/* ---- Transit time controls ---- */
+.timeRow {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.timeSelect {
+  flex: 0 0 44%;
+  height: 42px;
+  padding: 0 12px;
+
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  background: rgba(255, 255, 255, 0.9);
+
+  font-weight: 800;
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.82);
+
+  /* ensure it uses the same font */
+  font-family: inherit;
+}
+
+.timeInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 42px;
+  padding: 0 12px;
+
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  background: rgba(255, 255, 255, 0.9);
+
+  font-weight: 800;
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.82);
+
+  font-family: inherit;
+}
+
+.timeSelect:disabled,
+.timeInput:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 /* ---- Slider ---- */
@@ -392,11 +410,27 @@
   background: var(--primary);
   color: white;
   font-weight: 800;
+
+  font-family: inherit;
 }
 
 .primaryBtn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.primaryBtnDrained {
+  background: rgba(0, 0, 0, 0.06);
+  color: rgba(0, 0, 0, 0.78);
+  border-color: rgba(0, 0, 0, 0.16);
+}
+
+.primaryBtnDrained:hover {
+  background: rgba(0, 0, 0, 0.09);
+}
+
+.primaryBtnDrained:active {
+  background: rgba(0, 0, 0, 0.12);
 }
 
 .secondaryBtn {
@@ -411,6 +445,7 @@
   font-weight: 800;
 
   white-space: nowrap;
+  font-family: inherit;
 }
 
 /* Force the Clear button to be a fixed, non-stretching size even if global button styles exist */
@@ -473,5 +508,18 @@
   .modeBtn {
     flex: 1 1 45%;
   }
-}
 
+  .timeRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .timeSelect {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+
+  .timeInput {
+    width: 100%;
+  }
+}
