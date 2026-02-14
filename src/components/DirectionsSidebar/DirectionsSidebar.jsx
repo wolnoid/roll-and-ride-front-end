@@ -111,8 +111,8 @@ export default function DirectionsSidebar({
   routeCombo,
   setRouteCombo,
 
-  hillWeight,
-  setHillWeight,
+  hillMaxDeg,
+  setHillMaxDeg,
 
   // transit time props from Landing
   timeKind,
@@ -406,17 +406,18 @@ export default function DirectionsSidebar({
           <div className={styles.field}>
             <div className={styles.labelRow}>
               <div className={styles.label}>Avoid hills</div>
-              <div className={styles.hillValue}>{Math.round(hillWeight * 100)}</div>
+              <div className={styles.hillValue}>{Math.round(hillMaxDeg ?? 25)}°</div>
             </div>
             <input
               className={styles.slider}
               type="range"
               min="0"
-              max="100"
-              value={Math.round(hillWeight * 100)}
-              onChange={(e) => setHillWeight(Number(e.target.value) / 100)}
+              max="25"
+              step="1"
+              value={Math.round(hillMaxDeg ?? 25)}
+              onChange={(e) => setHillMaxDeg(Number(e.target.value))}
             />
-            <div className={styles.hint}>0 = fastest, 100 = strongly prefers flatter cycling legs.</div>
+            <div className={styles.hint}>Lower values avoid steeper inclines. 25° covers very steep city streets.</div>
           </div>
         </div>
 
@@ -438,6 +439,11 @@ export default function DirectionsSidebar({
                       {r.durationText ? r.durationText : "—"}{" "}
                       {r.distanceText ? `· ${r.distanceText}` : ""}
                     </div>
+                    {(r.timeRangeText || (r.departTimeText && r.arriveTimeText)) && (
+                      <div className={styles.routeTimes}>
+                        {r.timeRangeText || `${r.departTimeText}–${r.arriveTimeText}`}
+                      </div>
+                    )}
                     <div className={styles.routeSub}>{r.summary}</div>
                   </div>
                 </label>

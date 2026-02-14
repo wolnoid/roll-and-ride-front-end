@@ -38,6 +38,29 @@ function formatDuration(totalSeconds) {
   return m ? `${h} hr ${m} min` : `${h} hr`;
 }
 
+function coerceDate(v) {
+  if (!v) return null;
+  try {
+    if (v instanceof Date) return v;
+    if (typeof v === "number") return new Date(v);
+    if (typeof v === "string") return new Date(v);
+    if (typeof v === "object" && "value" in v) return coerceDate(v.value);
+    if (typeof v === "object" && "time" in v) return coerceDate(v.time);
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function fmtTime(d) {
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return "";
+  try {
+    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  } catch {
+    return "" + d;
+  }
+}
+
 export function summarizeDirectionsRoutes(directions) {
   const routes = directions?.routes ?? [];
   return routes.map((r, index) => {
@@ -55,11 +78,27 @@ export function summarizeDirectionsRoutes(directions) {
       distanceText = mi >= 10 ? `${mi.toFixed(0)} mi` : `${mi.toFixed(1)} mi`;
     }
 
+    const firstLeg = legs?.[0] ?? null;
+    const lastLeg = legs?.[legs.length - 1] ?? null;
+
+    const departTime = coerceDate(firstLeg?.departure_time) ?? null;
+    const arriveTime = coerceDate(lastLeg?.arrival_time) ?? null;
+
+    const departTimeText = firstLeg?.departure_time?.text ?? (departTime ? fmtTime(departTime) : "");
+    const arriveTimeText = lastLeg?.arrival_time?.text ?? (arriveTime ? fmtTime(arriveTime) : "");
+    const timeRangeText =
+      departTimeText && arriveTimeText ? `${departTimeText}–${arriveTimeText}` : "";
+
     return {
       index,
       summary: r?.summary || `Route ${index + 1}`,
       distanceText,
       durationText,
+      departTime,
+      arriveTime,
+      departTimeText,
+      arriveTimeText,
+      timeRangeText,
     };
   });
 }

@@ -33,7 +33,8 @@ export default function Landing() {
   const [origin, setOrigin] = useState(null);
   const [destination, setDestination] = useState(null);
   const [routeCombo, setRouteCombo] = useState(ROUTE_COMBO.TRANSIT);
-  const [hillWeight, setHillWeight] = useState(0);
+  // Avoid-hills slider expressed in degrees. 25° roughly covers very steep city streets.
+  const [hillMaxDeg, setHillMaxDeg] = useState(25);
 
   // ✅ Transit time controls
   // "NOW" | "DEPART_AT" | "ARRIVE_BY"
@@ -70,11 +71,11 @@ export default function Landing() {
           `mode:${travelModeForCombo}`,
           `o:${llKey(o)}`,
           `d:${llKey(d)}`,
-          `hill:${Math.round(hillWeight * 100)}`,
+          `hillDeg:${Math.round(hillMaxDeg)}`,
           `time:${timeKind}:${timeKind === "NOW" ? "now" : timeValue.toISOString()}`,
         ].join("|");
       },
-    [origin, destination, userLoc, routeCombo, travelModeForCombo, hillWeight, timeKind, timeValue]
+    [origin, destination, userLoc, routeCombo, travelModeForCombo, hillMaxDeg, timeKind, timeValue]
   );
 
   const currentQueryKey = computeQueryKey();
@@ -90,14 +91,14 @@ export default function Landing() {
   const destinationRef = useRef(destination);
   const userLocRef = useRef(userLoc);
   const routeComboRef = useRef(routeCombo);
-  const hillWeightRef = useRef(hillWeight);
+  const hillMaxDegRef = useRef(hillMaxDeg);
   const travelModeRef = useRef("TRANSIT");
 
   useEffect(() => void (originRef.current = origin), [origin]);
   useEffect(() => void (destinationRef.current = destination), [destination]);
   useEffect(() => void (userLocRef.current = userLoc), [userLoc]);
   useEffect(() => void (routeComboRef.current = routeCombo), [routeCombo]);
-  useEffect(() => void (hillWeightRef.current = hillWeight), [hillWeight]);
+  useEffect(() => void (hillMaxDegRef.current = hillMaxDeg), [hillMaxDeg]);
 
   useEffect(() => {
     travelModeRef.current = travelModeForCombo;
@@ -150,6 +151,8 @@ export default function Landing() {
     destinationRef,
     travelModeRef,
     userLocRef,
+    routeComboRef,
+    hillMaxDegRef,
     transitTimeRef,
 
     setOrigin,
@@ -246,8 +249,8 @@ export default function Landing() {
             setDestination={setDestination}
             routeCombo={routeCombo}
             setRouteCombo={setRouteCombo}
-            hillWeight={hillWeight}
-            setHillWeight={setHillWeight}
+            hillMaxDeg={hillMaxDeg}
+            setHillMaxDeg={setHillMaxDeg}
             timeKind={timeKind}
             setTimeKind={setTimeKind}
             timeValue={timeValue}
@@ -261,6 +264,8 @@ export default function Landing() {
             routeOptions={routing.routeOptions}
             selectedRouteIndex={routing.selectedRouteIndex}
             onSelectRoute={routing.selectRoute}
+            selectedSegments={routing.selectedSegments}
+            showGooglePanel={routing.showGooglePanel}
           />
 
           <div className={styles.mapWrap} ref={mapWrapRef}>
