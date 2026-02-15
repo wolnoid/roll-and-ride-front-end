@@ -84,6 +84,10 @@ export function useRouting({
   // Primary route polylines (we draw these ourselves; DirectionsRenderer is kept mostly for panel + dragging)
   const primaryPolylinesRef = useRef([]);
 
+  // Base polyline styles (used to normalize thickness after zoom settles)
+  const polyBaseRef = useRef(new WeakMap());
+  const lastRestScaleRef = useRef(1);
+
   // Hybrid map overlays
   const hybridPolylinesRef = useRef([]);
   const hybridAltPolylinesRef = useRef([]);
@@ -96,6 +100,9 @@ export function useRouting({
   const microLastRendererRef = useRef(null);
   const microFirstListenerRef = useRef(null);
   const microLastListenerRef = useRef(null);
+  const microShadowPolylinesRef = useRef({ first: null, last: null });
+  // Visual polylines for draggable first/last micro-legs (renderer kept mostly invisible for dragging)
+  const microMainPolylinesRef = useRef({ first: null, last: null });
   const microProgrammaticRef = useRef({ first: false, last: false });
   const microSegIndexRef = useRef({ first: -1, last: -1 });
   const microViaPointsRef = useRef({ first: [], last: [] });
@@ -233,6 +240,10 @@ useEffect(() => {
       }
       if (k === "first") microFirstRendererRef.current = null;
       else microLastRendererRef.current = null;
+
+      clearMicroShadow(k);
+
+      clearMicroMain(k);
     });
 
     hybridReplanInFlightRef.current = false;
@@ -437,8 +448,10 @@ useEffect(() => {
           icon: {
             path: window.google.maps.SymbolPath.CIRCLE,
             scale,
-            strokeColor: color,
-            strokeOpacity: 1,
+            fillColor: color,
+            fillOpacity: 1,
+            strokeOpacity: 0,
+            strokeWeight: 0,
           },
           offset: "0",
           repeat,
@@ -446,6 +459,267 @@ useEffect(() => {
       ],
     };
   }
+
+  function styleIsDotted(style) {
+    return Boolean(style?.icons?.length);
+  }
+
+
+
+
+function registerPolylineBase(poly) {
+  if (!poly) return;
+
+  const wm = polyBaseRef.current;
+  if (!wm) return;
+
+  try {
+    if (!wm.has(poly)) {
+      wm.set(poly, { strokeWeight: poly.get("strokeWeight"), icons: poly.get("icons") });
+    }
+
+    // If the map is resting at a fractional-zoom pane scale, newly created polylines can look
+    // too thin until the next idle. Immediately sync them to the last known rest scale.
+    const scale = lastRestScaleRef.current ?? 1;
+    if (Math.abs(scale - 1) < 0.01) return;
+
+    const inv = 1 / (scale || 1);
+    const base = wm.get(poly);
+    const sw = Number(base?.strokeWeight);
+    const baseIcons = base?.icons;
+
+    const out = {};
+    if (Number.isFinite(sw) && sw > 0) out.strokeWeight = Math.max(1, sw * inv);
+    if (Array.isArray(baseIcons) && baseIcons.length) out.icons = scaleIconsForRest(baseIcons, inv);
+
+    try {
+      poly.setOptions(out);
+    } catch {
+      // ignore
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function parseScaleFromTransform(transform) {
+  if (!transform || transform === "none") return 1;
+
+  const m3 = transform.match(/^matrix3d\((.+)\)$/);
+  if (m3) {
+    const v = m3[1].split(",").map((x) => Number(x.trim()));
+    if (v.length === 16) {
+      const sx = Math.hypot(v[0], v[1], v[2]);
+      const sy = Math.hypot(v[4], v[5], v[6]);
+      const s = (sx + sy) / 2;
+      return Number.isFinite(s) ? s : 1;
+    }
+  }
+
+  const m2 = transform.match(/^matrix\((.+)\)$/);
+  if (m2) {
+    const v = m2[1].split(",").map((x) => Number(x.trim()));
+    if (v.length >= 6) {
+      const [a, b, c, d] = v;
+      const sx = Math.hypot(a, b);
+      const sy = Math.hypot(c, d);
+      const s = (sx + sy) / 2;
+      return Number.isFinite(s) ? s : 1;
+    }
+  }
+
+  return 1;
+}
+
+function scalePxString(px, invScale) {
+  if (typeof px !== "string") return px;
+  const mm = px.trim().match(/^(-?\d+(?:\.\d+)?)px$/i);
+  if (!mm) return px;
+  const n = parseFloat(mm[1]);
+  if (!Number.isFinite(n)) return px;
+  const out = n * invScale;
+  return `${Number(out.toFixed(3)).toString()}px`;
+}
+
+function scaleIconsForRest(icons, invScale) {
+  if (!Array.isArray(icons) || !icons.length) return icons;
+
+  return icons.map((item) => {
+    const icon = item?.icon ?? {};
+    const s = icon?.scale;
+    const scaledIcon =
+      Number.isFinite(s) ? { ...icon, scale: Math.max(0.5, s * invScale) } : icon;
+
+    return {
+      ...item,
+      icon: scaledIcon,
+      repeat: scalePxString(item?.repeat, invScale),
+      offset: item?.offset,
+    };
+  });
+}
+
+function restScaleFromZoomFraction() {
+  try {
+    const z = map?.getZoom?.();
+    if (!Number.isFinite(z)) return 1;
+    const frac = z - Math.floor(z);
+    if (Math.abs(frac) < 0.0005) return 1;
+    const s = Math.pow(2, frac);
+    return Number.isFinite(s) && s > 0.25 && s < 4 ? s : 1;
+  } catch {
+    return 1;
+  }
+}
+
+function restScaleFromDom() {
+  const root = map?.getDiv?.();
+  if (!root) return 1;
+
+  let bestScale = 1;
+  let bestDev = 0;
+
+  const nodes = root.querySelectorAll("div");
+  const limit = Math.min(nodes.length, 450);
+
+  for (let i = 0; i < limit; i++) {
+    const el = nodes[i];
+    const tf = window.getComputedStyle(el).transform;
+    const s = parseScaleFromTransform(tf);
+    const dev = Math.abs(s - 1);
+    if (dev > bestDev + 0.01 && s > 0.25 && s < 4) {
+      bestDev = dev;
+      bestScale = s;
+    }
+  }
+
+  return bestScale;
+}
+
+function getRestOverlayScale() {
+  const dom = restScaleFromDom();
+  if (Math.abs(dom - 1) > 0.02) return dom;
+
+  const z = restScaleFromZoomFraction();
+  if (Math.abs(z - 1) > 0.02) return z;
+
+  return 1;
+}
+
+function applyRestScaleToMicroRenderers(scale) {
+  // Micro-leg DirectionsRenderers are used for dragging only.
+  // Keep their polylines effectively invisible so our own microMain polylines are the only visible lines.
+  const applyTo = (which) => {
+    const renderer =
+      which === "first" ? microFirstRendererRef.current : microLastRendererRef.current;
+    if (!renderer) return;
+
+    try {
+      renderer.setOptions?.({
+        polylineOptions: {
+          strokeOpacity: 0.01, // still hit-testable
+          strokeWeight: 18,
+          zIndex: 40,
+        },
+      });
+    } catch {
+      // ignore
+    }
+  };
+
+  applyTo("first");
+  applyTo("last");
+}
+
+function applyRestScaleToAllPolylines(scale) {
+  const inv = 1 / (scale || 1);
+
+  const all = [
+    ...(primaryPolylinesRef.current ?? []),
+    ...(altPolylinesRef.current ?? []),
+    ...(hybridPolylinesRef.current ?? []),
+    ...(hybridAltPolylinesRef.current ?? []),
+  ];
+
+  const ms = microShadowPolylinesRef.current ?? {};
+  if (ms.first) all.push(ms.first);
+  if (ms.last) all.push(ms.last);
+
+
+  const mm = microMainPolylinesRef.current ?? {};
+  if (mm.first) all.push(mm.first);
+  if (mm.last) all.push(mm.last);
+
+  for (const poly of all) {
+    if (!poly?.setOptions) continue;
+
+    try {
+      registerPolylineBase(poly);
+    } catch {}
+
+    const base = polyBaseRef.current?.get?.(poly);
+    const sw = Number(base?.strokeWeight);
+    const baseIcons = base?.icons;
+
+    const out = {};
+
+    if (Number.isFinite(sw) && sw > 0) {
+      out.strokeWeight = Math.max(1, sw * inv);
+    }
+
+    if (Array.isArray(baseIcons) && baseIcons.length) {
+      out.icons = scaleIconsForRest(baseIcons, inv);
+    }
+
+    try {
+      poly.setOptions(out);
+    } catch {
+      // ignore
+    }
+  }
+
+  applyRestScaleToMicroRenderers(scale);
+}
+// --- Route line shadow / edge outline (Google-ish) ---
+// Implemented as a slightly thicker, low-opacity black polyline drawn beneath the main line.
+const SHADOW_COLOR = "#000000";
+const SHADOW_OPACITY_PRIMARY = 0.4;
+const SHADOW_OPACITY_ALT = 0.14;
+const SHADOW_EXTRA_PX = 4;
+
+// Overlap masking (alternate routes): keep a small gap for near-parallel overlaps,
+// but allow crossings to draw through so we don't create awkward 'holes' at intersections.
+const OVERLAP_MASK_MIN_PX = 7;
+const OVERLAP_MASK_FACTOR = 0.6;
+const OVERLAP_MASK_PARALLEL_DOT_MIN = 0.78; // ~39 degrees
+
+function overlapMaskThresholdPx(strokeWeight) {
+  return Math.max(OVERLAP_MASK_MIN_PX, (strokeWeight + SHADOW_EXTRA_PX) * OVERLAP_MASK_FACTOR);
+}
+
+function addShadowPolyline({ path, strokeWeight = 8, zIndex = 0, isAlt = false, skip = false }) {
+  if (skip) return null;
+
+  if (!map || !path?.length) return null;
+
+  try {
+    const poly = new window.google.maps.Polyline({
+      map,
+      path,
+      clickable: false,
+      strokeColor: SHADOW_COLOR,
+      strokeOpacity: isAlt ? SHADOW_OPACITY_ALT : SHADOW_OPACITY_PRIMARY,
+      strokeWeight: Math.max(1, (strokeWeight ?? 8) + SHADOW_EXTRA_PX),
+      // Ensure shadow stays under the main line even when zIndex is 0.
+      zIndex: (zIndex ?? 0) - 1,
+    });
+    registerPolylineBase(poly);
+    return poly;
+  } catch {
+    return null;
+  }
+}
+
 
   function drawPrimaryPolylinesFromRoute(route) {
     if (!map || !route) return;
@@ -486,6 +760,15 @@ useEffect(() => {
             polylineOptions = { strokeColor: HYBRID_STYLES.GOOGLE_BLUE, strokeOpacity: 1, strokeWeight: 8 };
           }
 
+          const shadow = addShadowPolyline({
+            path,
+            strokeWeight: polylineOptions?.strokeWeight ?? 8,
+            zIndex,
+            isAlt: false,
+            skip: styleIsDotted(polylineOptions),
+          });
+          if (shadow) primaryPolylinesRef.current.push(shadow);
+
           const poly = new window.google.maps.Polyline({
             map,
             path,
@@ -493,6 +776,7 @@ useEffect(() => {
             ...polylineOptions,
             zIndex,
           });
+          registerPolylineBase(poly);
           primaryPolylinesRef.current.push(poly);
         });
       });
@@ -509,6 +793,15 @@ useEffect(() => {
     else if (travelMode === "WALKING") style = polylineStyleForMode("WALK", { isAlt: false });
     else if (travelMode === "BICYCLING") style = polylineStyleForMode("BIKE", { isAlt: false });
 
+    const shadow = addShadowPolyline({
+      path,
+      strokeWeight: style?.strokeWeight ?? 8,
+      zIndex,
+      isAlt: false,
+      skip: styleIsDotted(style),
+    });
+    if (shadow) primaryPolylinesRef.current.push(shadow);
+
     const poly = new window.google.maps.Polyline({
       map,
       path,
@@ -516,8 +809,231 @@ useEffect(() => {
       ...style,
       zIndex,
     });
+    registerPolylineBase(poly);
     primaryPolylinesRef.current.push(poly);
   }
+
+  function getProjectionAndZoom() {
+    try {
+      const proj = map?.getProjection?.();
+      const zoom = map?.getZoom?.();
+      if (!proj || !Number.isFinite(zoom)) return null;
+      return { proj, zoom };
+    } catch {
+      return null;
+    }
+  }
+
+  function toWorldPx(ll, proj, zoom) {
+    const n = latLngToNums(ll);
+    if (!n) return null;
+    try {
+      const latLngObj = new window.google.maps.LatLng(n.lat, n.lng);
+      const pt = proj.fromLatLngToPoint(latLngObj);
+      const scale = Math.pow(2, zoom);
+      return { x: pt.x * scale, y: pt.y * scale };
+    } catch {
+      return null;
+    }
+  }
+
+  function distSqPointToSeg(p, a, b) {
+    // Standard closest-point-on-segment distance in 2D.
+    const vx = b.x - a.x;
+    const vy = b.y - a.y;
+    const wx = p.x - a.x;
+    const wy = p.y - a.y;
+
+    const c1 = vx * wx + vy * wy;
+    if (c1 <= 0) return (p.x - a.x) ** 2 + (p.y - a.y) ** 2;
+
+    const c2 = vx * vx + vy * vy;
+    if (c2 <= 0.0000001) return (p.x - a.x) ** 2 + (p.y - a.y) ** 2;
+
+    const t = Math.min(1, Math.max(0, c1 / c2));
+    const px = a.x + t * vx;
+    const py = a.y + t * vy;
+    return (p.x - px) ** 2 + (p.y - py) ** 2;
+  }
+
+  function densifyPath(path, maxStepMeters = 30) {
+    if (!Array.isArray(path) || path.length < 2) return path ?? [];
+
+    const out = [];
+    const spherical = window.google?.maps?.geometry?.spherical;
+    const canInterp = typeof spherical?.interpolate === "function";
+
+    for (let i = 0; i < path.length - 1; i++) {
+      const a = path[i];
+      const b = path[i + 1];
+      if (i === 0) out.push(a);
+
+      const A = latLngToNums(a);
+      const B = latLngToNums(b);
+      if (!A || !B) {
+        out.push(b);
+        continue;
+      }
+
+      const d = haversineMeters(A, B);
+      if (!Number.isFinite(d) || d <= maxStepMeters) {
+        out.push(b);
+        continue;
+      }
+
+      const steps = Math.min(60, Math.ceil(d / maxStepMeters));
+      for (let s = 1; s < steps; s++) {
+        const f = s / steps;
+        if (canInterp) {
+          try {
+            out.push(spherical.interpolate(a, b, f));
+            continue;
+          } catch {
+            // fall through
+          }
+        }
+        out.push({ lat: A.lat + (B.lat - A.lat) * f, lng: A.lng + (B.lng - A.lng) * f });
+      }
+      out.push(b);
+    }
+
+    return out;
+  }
+
+  function buildOccupiedSegmentsPx(paths, proj, zoom) {
+    const segs = [];
+    (paths ?? []).forEach((raw) => {
+      const p = densifyPath(raw, 40);
+      for (let i = 0; i < p.length - 1; i++) {
+        const a = toWorldPx(p[i], proj, zoom);
+        const b = toWorldPx(p[i + 1], proj, zoom);
+        if (!a || !b) continue;
+        const minX = Math.min(a.x, b.x);
+        const maxX = Math.max(a.x, b.x);
+        const minY = Math.min(a.y, b.y);
+        const maxY = Math.max(a.y, b.y);
+        segs.push({ a, b, minX, maxX, minY, maxY });
+      }
+    });
+    return segs;
+  }
+
+  function normalizeUnit(v) {
+    const n = Math.hypot(v?.x ?? 0, v?.y ?? 0);
+    if (!Number.isFinite(n) || n <= 1e-9) return null;
+    return { x: v.x / n, y: v.y / n };
+  }
+
+  function nearestOccupiedSeg(px, occupiedSegs, thresholdPx) {
+    const t = thresholdPx;
+    const tSq = t * t;
+    let best = null;
+    let bestD = Infinity;
+
+    for (const s of occupiedSegs) {
+      // cheap bbox reject
+      if (px.x < s.minX - t || px.x > s.maxX + t || px.y < s.minY - t || px.y > s.maxY + t) continue;
+      const d = distSqPointToSeg(px, s.a, s.b);
+      if (d <= tSq && d < bestD) {
+        bestD = d;
+        best = s;
+      }
+    }
+    return best;
+  }
+
+  function isPointNearOccupied(px, dirUnit, occupiedSegs, thresholdPx) {
+    const s = nearestOccupiedSeg(px, occupiedSegs, thresholdPx);
+    if (!s) return false;
+
+    // If we can't estimate direction, fall back to masking (conservative).
+    if (!dirUnit) return true;
+
+    const occDir = normalizeUnit({ x: s.b.x - s.a.x, y: s.b.y - s.a.y });
+    if (!occDir) return true;
+
+    // Only mask when paths are roughly parallel. For crossings, allow the line through.
+    const dot = Math.abs(dirUnit.x * occDir.x + dirUnit.y * occDir.y);
+    if (dot < OVERLAP_MASK_PARALLEL_DOT_MIN) return false;
+
+    return true;
+  }
+
+  function visibleChunksMasked(path, occupiedSegs, proj, zoom, thresholdPx) {
+    const dense = densifyPath(path, 30);
+    if (!dense.length) return [];
+
+    // Precompute px coords (we need neighbors to estimate direction).
+    const pts = [];
+    const pxs = [];
+    for (const pt of dense) {
+      const px = toWorldPx(pt, proj, zoom);
+      if (!px) continue;
+      pts.push(pt);
+      pxs.push(px);
+    }
+    if (pts.length < 2) return [];
+
+    const chunks = [];
+    let cur = [];
+
+    for (let i = 0; i < pts.length; i++) {
+      const pt = pts[i];
+      const px = pxs[i];
+
+      const prev = pxs[i - 1] ?? px;
+      const next = pxs[i + 1] ?? px;
+      const dirUnit = normalizeUnit({ x: next.x - prev.x, y: next.y - prev.y });
+
+      const hidden = isPointNearOccupied(px, dirUnit, occupiedSegs, thresholdPx);
+
+      if (!hidden) {
+        cur.push(pt);
+      } else {
+        if (cur.length >= 2) chunks.push(cur);
+        cur = [];
+      }
+    }
+
+    if (cur.length >= 2) chunks.push(cur);
+    return chunks;
+  }
+
+  // For transit routes, we treat WALKING steps as "non-claiming" space.
+  // This avoids alternate-route clipping creating awkward gaps on walking transfers.
+  function routeStepParts(route) {
+    const out = [];
+    const legs = route?.legs ?? [];
+    for (const leg of legs) {
+      const steps = leg?.steps ?? [];
+      for (const step of steps) {
+        const mode = step?.travel_mode ?? null;
+        const path = decodeStepPath(step);
+        if (!path?.length) continue;
+        // Keep the original step so we can extract transit line colors for alternates.
+        out.push({ mode, path, step });
+      }
+    }
+    // Fallback if steps are missing.
+    if (!out.length && route?.overview_path?.length) {
+      out.push({ mode: null, path: route.overview_path, step: null });
+    }
+    return out;
+  }
+
+  function routeNonWalkingPaths(route) {
+    const out = [];
+    const parts = routeStepParts(route);
+    for (const p of parts) {
+      if (p?.mode === "WALKING") continue;
+      if (p?.path?.length) out.push(p.path);
+    }
+    // If everything is walking or modes are unknown, fall back to overview.
+    if (!out.length && route?.overview_path?.length) out.push(route.overview_path);
+    return out;
+  }
+
+  
 
   function drawAlternatePolylines(fullDirections, selectedIdx) {
     if (!map) return;
@@ -527,34 +1043,98 @@ useEffect(() => {
     const routes = fullDirections?.routes ?? [];
     if (routes.length <= 1) return;
 
-    // Styling for alternates (lighter blue, consistent)
+    // Styling for alternates (still background, but clearer)
     const ALT_COLOR = HYBRID_STYLES.ALT_GRAY;
-    const ALT_OPACITY = 0.35;
+    const ALT_OPACITY = 0.6;
     const ALT_WEIGHT = 6;
 
+    const pz = getProjectionAndZoom();
+    const thresholdPx = overlapMaskThresholdPx(ALT_WEIGHT);
+
+    // Selected route occupies space first; alternates will be clipped under it.
+    // For transit, exclude WALKING steps from the occupied set so we don't punch holes
+    // in alternate routes' walking transfers.
+    let occupiedSegs = [];
+    if (pz) {
+      const selectedRoute = routes?.[selectedIdx];
+      const occPaths = routeHasTransitSteps(selectedRoute)
+        ? routeNonWalkingPaths(selectedRoute)
+        : [selectedRoute?.overview_path ?? []];
+      occupiedSegs = buildOccupiedSegmentsPx(occPaths, pz.proj, pz.zoom);
+    }
+
+    // Draw in pane order (lowest index = highest ranked). Later routes are clipped under earlier routes.
     routes.forEach((r, idx) => {
       if (idx === selectedIdx) return;
-      const path = r?.overview_path;
-      if (!path?.length) return;
 
-      const poly = new window.google.maps.Polyline({
-        map,
-        path,
-        clickable: true,
-        strokeColor: ALT_COLOR,
-        strokeOpacity: ALT_OPACITY,
-        strokeWeight: ALT_WEIGHT,
-        zIndex: 5,
+      const isTransitRoute = routeHasTransitSteps(r);
+      const parts = isTransitRoute ? routeStepParts(r) : [{ mode: null, path: r?.overview_path ?? [] }];
+      if (!parts.length) return;
+
+      const zIndex = 12 - idx; // higher rank sits on top among alternates
+
+      // Accumulate non-walking chunks we draw for this route; add to occupied set once per route.
+      const routeOccChunks = [];
+
+      parts.forEach((part) => {
+        const rawPath = part?.path;
+        if (!rawPath?.length) return;
+
+        const isWalking = part?.mode === "WALKING";
+        // Don't clip walking transfers; they are visually thin and clipping creates obvious gaps.
+        const chunks = pz && !isWalking
+          ? visibleChunksMasked(rawPath, occupiedSegs, pz.proj, pz.zoom, thresholdPx)
+          : [rawPath];
+
+        if (!chunks.length) return;
+
+        chunks.forEach((chunk) => {
+          // For unselected transit routes, color TRANSIT legs by their line color.
+          // Keep non-transit legs (walk/bike/skate connectors) in the default alternate blue.
+          let strokeColor = ALT_COLOR;
+          if (part?.mode === "TRANSIT") {
+            const td = getTransitDetailsFromStep(part?.step);
+            strokeColor = getTransitLineColor(td, ALT_COLOR);
+          }
+
+          const shadow = addShadowPolyline({
+            path: chunk,
+            strokeWeight: ALT_WEIGHT,
+            zIndex,
+            isAlt: true,
+          });
+          if (shadow) altPolylinesRef.current.push(shadow);
+
+          const poly = new window.google.maps.Polyline({
+            map,
+            path: chunk,
+            clickable: true,
+            strokeColor,
+            strokeOpacity: ALT_OPACITY,
+            strokeWeight: ALT_WEIGHT,
+            zIndex,
+          });
+
+          const listener = poly.addListener("click", () => {
+            selectRoute(idx);
+          });
+
+          registerPolylineBase(poly);
+          altPolylinesRef.current.push(poly);
+          altPolylineListenersRef.current.push(listener);
+        });
+
+        if (!isWalking) routeOccChunks.push(...chunks);
       });
 
-      const listener = poly.addListener("click", () => {
-        selectRoute(idx);
-      });
-
-      altPolylinesRef.current.push(poly);
-      altPolylineListenersRef.current.push(listener);
+      // Feed what we actually drew into the occupied set so lower-ranked routes don't stack under it.
+      // Exclude walking chunks so we don't create transfer-leg holes on lower-ranked routes.
+      if (pz && routeOccChunks.length) {
+        occupiedSegs.push(...buildOccupiedSegmentsPx(routeOccChunks, pz.proj, pz.zoom));
+      }
     });
   }
+
 
   // ---------------------------
   // Hybrid route drawing (custom polylines)
@@ -662,8 +1242,8 @@ useEffect(() => {
           fillColor: "#FFFFFF",
           fillOpacity: 1,
           strokeColor: strokeColor ?? DEFAULT_TRANSIT_BLUE,
-          strokeOpacity: 1,
-          strokeWeight: 2,
+          strokeOpacity: 0,
+          strokeWeight: 0,
         },
         title: stop?.name ?? "Stop",
       });
@@ -691,15 +1271,26 @@ useEffect(() => {
         const path = getStepPath(seg.step);
         if (!path.length) return;
 
+        const weight = isAlt ? 6 : 8;
+        const shadow = addShadowPolyline({
+          path,
+          strokeWeight: weight,
+          zIndex,
+          isAlt,
+        });
+        if (shadow) (isAlt ? hybridAltPolylinesRef : hybridPolylinesRef).current.push(shadow);
+
         const poly = new window.google.maps.Polyline({
           map,
           path,
           clickable: false,
-          strokeColor: isAlt ? HYBRID_STYLES.ALT_GRAY : lineColor,
-          strokeOpacity: isAlt ? 0.35 : 1,
-          strokeWeight: isAlt ? 6 : 8,
+          // Even for alternates, keep TRANSIT legs in their line color.
+          strokeColor: lineColor,
+          strokeOpacity: isAlt ? 0.6 : 1,
+          strokeWeight: weight,
           zIndex,
         });
+        registerPolylineBase(poly);
         (isAlt ? hybridAltPolylinesRef : hybridPolylinesRef).current.push(poly);
         return;
       }
@@ -710,6 +1301,15 @@ useEffect(() => {
       const path = seg.route?.overview_path ?? [];
       if (!path.length) return;
       const style = polylineStyleForMode(seg.mode, { isAlt });
+      const shadow = addShadowPolyline({
+        path,
+        strokeWeight: style?.strokeWeight ?? (isAlt ? 6 : 8),
+        zIndex,
+        isAlt,
+        skip: styleIsDotted(style),
+      });
+      if (shadow) (isAlt ? hybridAltPolylinesRef : hybridPolylinesRef).current.push(shadow);
+
       const poly = new window.google.maps.Polyline({
         map,
         path,
@@ -717,6 +1317,7 @@ useEffect(() => {
         ...style,
         zIndex,
       });
+      registerPolylineBase(poly);
       (isAlt ? hybridAltPolylinesRef : hybridPolylinesRef).current.push(poly);
     });
   }
@@ -745,48 +1346,99 @@ useEffect(() => {
 
     if (!options?.length || options.length <= 1) return;
 
-    // Draw full alternates as continuous segments (no chunking/"connectors" that create spaghetti lines).
+    const pz = getProjectionAndZoom();
+    const thresholdPx = overlapMaskThresholdPx(6);
+
+    // Selected option occupies space first.
+    let occupiedSegs = [];
+    if (pz) {
+      const selectedOpt = options[selectedIdx];
+      const occPaths = [];
+      (selectedOpt?.segments ?? []).forEach((seg) => {
+        if (!seg || seg.mode === "WAIT") return;
+        if (seg.mode === "TRANSIT") {
+          const p = getStepPath(seg.step);
+          if (p?.length) occPaths.push(p);
+        } else {
+          const p = seg.route?.overview_path ?? [];
+          if (p?.length) occPaths.push(p);
+        }
+      });
+      occupiedSegs = buildOccupiedSegmentsPx(occPaths, pz.proj, pz.zoom);
+    }
+
+    // Draw in pane order; clip lower-ranked options under higher-ranked ones.
     options.forEach((opt, idx) => {
       if (idx === selectedIdx) return;
+
+      const zIndex = 12 - idx;
 
       const segs = opt?.segments ?? [];
       segs.forEach((seg) => {
         if (!seg || seg.mode === "WAIT") return;
 
-        let path = [];
+        let rawPath = [];
         let polyOptions = null;
+        let skipShadow = false;
 
         if (seg.mode === "TRANSIT") {
-          path = getStepPath(seg.step);
+          rawPath = getStepPath(seg.step);
+          const td = seg.transitDetails;
+          const lineColor = getTransitLineColor(td, DEFAULT_TRANSIT_BLUE);
           polyOptions = {
-            strokeColor: HYBRID_STYLES.ALT_GRAY,
-            strokeOpacity: 0.35,
+            // Alternates: keep TRANSIT legs in their line color.
+            strokeColor: lineColor,
+            strokeOpacity: 0.6,
             strokeWeight: 6,
           };
         } else {
-          path = seg.route?.overview_path ?? [];
+          rawPath = seg.route?.overview_path ?? [];
           polyOptions = polylineStyleForMode(seg.mode, { isAlt: true });
+          skipShadow = styleIsDotted(polyOptions);
         }
 
-        if (!path?.length || !polyOptions) return;
+        if (!rawPath?.length || !polyOptions) return;
 
-        const poly = new window.google.maps.Polyline({
-          map,
-          path,
-          clickable: true,
-          ...polyOptions,
-          zIndex: 0,
+        const chunks = pz
+          ? visibleChunksMasked(rawPath, occupiedSegs, pz.proj, pz.zoom, thresholdPx)
+          : [rawPath];
+
+        if (!chunks.length) return;
+
+        chunks.forEach((chunk) => {
+          const shadow = addShadowPolyline({
+            path: chunk,
+            strokeWeight: polyOptions?.strokeWeight ?? 6,
+            zIndex,
+            isAlt: true,
+            skip: skipShadow,
+          });
+          if (shadow) hybridAltPolylinesRef.current.push(shadow);
+
+          const poly = new window.google.maps.Polyline({
+            map,
+            path: chunk,
+            clickable: true,
+            ...polyOptions,
+            zIndex,
+          });
+
+          const listener = poly.addListener("click", () => {
+            selectRoute(idx);
+          });
+
+          registerPolylineBase(poly);
+          hybridAltPolylinesRef.current.push(poly);
+          hybridAltListenersRef.current.push(listener);
         });
 
-        const listener = poly.addListener("click", () => {
-          selectRoute(idx);
-        });
-
-        hybridAltPolylinesRef.current.push(poly);
-        hybridAltListenersRef.current.push(listener);
+        if (pz) {
+          occupiedSegs.push(...buildOccupiedSegmentsPx(chunks, pz.proj, pz.zoom));
+        }
       });
     });
   }
+
 
 
   // ---------------------------
@@ -965,6 +1617,74 @@ useEffect(() => {
   function clearMicroDetourMarkers(which) {
     microViaMarkersRef.current[which].forEach((m) => disposeAnyMarker(m));
     microViaMarkersRef.current[which] = [];
+  }
+
+  function clearMicroShadow(which) {
+    const cur = microShadowPolylinesRef.current?.[which] ?? null;
+    if (cur) {
+      try {
+        cur.setMap(null);
+      } catch {
+        // ignore
+      }
+    }
+    if (microShadowPolylinesRef.current) microShadowPolylinesRef.current[which] = null;
+  }
+
+
+function clearMicroMain(which) {
+  const cur = microMainPolylinesRef.current?.[which] ?? null;
+  if (cur) {
+    try {
+      cur.setMap(null);
+    } catch {
+      // ignore
+    }
+  }
+  if (microMainPolylinesRef.current) microMainPolylinesRef.current[which] = null;
+}
+
+function syncMicroMain(which, mode, route) {
+  clearMicroMain(which);
+
+  const path = route?.overview_path ?? [];
+  if (!map || !path?.length) return;
+
+  const style = polylineStyleForMode(mode, { isAlt: false });
+
+  try {
+    const poly = new window.google.maps.Polyline({
+      map,
+      path,
+      clickable: false, // allow drag hit-testing to fall through to the DirectionsRenderer
+      ...style,
+      zIndex: 41,
+    });
+    registerPolylineBase(poly);
+    if (microMainPolylinesRef.current) microMainPolylinesRef.current[which] = poly;
+  } catch {
+    // ignore
+  }
+}
+
+  function syncMicroShadow(which, mode, route) {
+    clearMicroShadow(which);
+
+    const path = route?.overview_path ?? [];
+    if (!map || !path?.length) return;
+
+    const style = polylineStyleForMode(mode, { isAlt: false });
+    if (styleIsDotted(style)) return;
+
+    // Draw just the outline shadow behind the draggable renderer polyline.
+    const shadow = addShadowPolyline({
+      path,
+      strokeWeight: style?.strokeWeight ?? 8,
+      zIndex: 40,
+      isAlt: false,
+    });
+
+    if (microShadowPolylinesRef.current) microShadowPolylinesRef.current[which] = shadow;
   }
 
   async function rerouteMicroLegFromViaPoints(which, viaPoints) {
@@ -1202,6 +1922,10 @@ useEffect(() => {
     // Refresh detour markers for this micro leg early so replans preserve the latest via-points
     syncMicroDetours(which, segs[segIdx]);
 
+    // Shadow/edge outline for the draggable micro leg (skip dotted WALK)
+    syncMicroShadow(which, oldSeg?.mode ?? segs[segIdx]?.mode, route);
+    syncMicroMain(which, oldSeg?.mode ?? segs[segIdx]?.mode, route);
+
     let nextOpt = rebuildWaitSegments(currentOpt, segs);
 
     // For first-leg edits, shift the trip start time to minimize waiting at the first stop,
@@ -1234,7 +1958,7 @@ useEffect(() => {
 
     if (existing) {
       try {
-        existing.setOptions?.({ polylineOptions: { ...style, zIndex: 40 } });
+        existing.setOptions?.({ polylineOptions: { strokeOpacity: 0.01, strokeWeight: 18, zIndex: 40 } });
       } catch {
         // ignore
       }
@@ -1247,7 +1971,7 @@ useEffect(() => {
       suppressMarkers: true,
       preserveViewport: true,
       hideRouteList: true,
-      polylineOptions: { ...style, zIndex: 40 },
+      polylineOptions: { strokeOpacity: 0.01, strokeWeight: 18, zIndex: 40 },
     });
 
     const listener = renderer.addListener("directions_changed", () => {
@@ -1291,6 +2015,10 @@ useEffect(() => {
 
     if (isStaleSeq(seq)) return;
     syncMicroDetours(which, seg);
+
+    // Shadow/edge outline for the draggable micro leg (skip dotted WALK)
+    syncMicroShadow(which, seg.mode, seg.route);
+    syncMicroMain(which, seg.mode, seg.route);
   }
 
   function clearHybridMapOnly() {
@@ -1315,6 +2043,10 @@ useEffect(() => {
     setShowGooglePanel(false);
 
     const opt = options[clamped];
+
+    // Re-enable Google's transit route shields/labels for the selected hybrid option.
+    // (These are provided by DirectionsRenderer; we keep its polyline invisible.)
+    syncHybridTransitGlyphs(opt, seq);
 
     const { first, last } = getFirstLastMicroSegIndices(opt);
     microSegIndexRef.current.first = first;
@@ -1555,9 +2287,15 @@ useEffect(() => {
     const seq = bumpRequestSeq();
     hasActiveRouteRef.current = false;
 
+    const combo = routeComboRef?.current ?? null;
+    const isHybridCombo =
+      combo === ROUTE_COMBO.TRANSIT_BIKE || combo === ROUTE_COMBO.TRANSIT_SKATE;
+
     // Clear all existing overlays immediately so nothing from the previous search lingers.
     // Also hard-reset the main renderer to avoid lingering transit glyphs from the prior search.
-    hardResetMainRenderer({ reattach: true, clearPanel: false });
+    hardResetMainRenderer({ reattach: true, clearPanel: isHybridCombo });
+    if (isHybridCombo) configureMainRendererForHybrid();
+    else configureMainRendererForNormal();
     clearAltPolylines();
     clearPrimaryPolylines();
     clearHybridOverlays();
@@ -1569,21 +2307,16 @@ useEffect(() => {
 
     const viaPts = viaPointsOverride ?? viaPointsRef.current;
 
-    const combo = routeComboRef?.current ?? null;
-
     // ---------------------------
     // Hybrid modes (Transit + Bike / Transit + Skate)
     // ---------------------------
-    if (combo === ROUTE_COMBO.TRANSIT_BIKE || combo === ROUTE_COMBO.TRANSIT_SKATE) {
+    if (isHybridCombo) {
       try {
         // Clear Google renderer output (we draw our own polylines)
         clearAlternativesState();
         clearAltPolylines();
         clearPrimaryPolylines();
         clearHybridOverlays();
-
-        // Detach the main renderer in hybrid mode so no Google overlay glyphs linger.
-        hardResetMainRenderer({ reattach: false, clearPanel: true });
 
         setShowGooglePanel(false);
         setSelectedSegments(null);
@@ -1837,6 +2570,104 @@ useEffect(() => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, map]);
 
+  // Re-clip alternates when zoom changes (overlap masking is in pixel-space at current zoom).
+  
+// Normalize stroke thickness after zoom settles.
+// With fractional zoom enabled, Maps can leave the overlay pane scaled at rest.
+// We compensate on 'idle' so routes look identical thickness regardless of final zoom fraction.
+useEffect(() => {
+  if (!enabled || !map) return;
+
+  let idleListener = null;
+
+  const onIdle = () => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const scale = getRestOverlayScale();
+        const last = lastRestScaleRef.current ?? 1;
+
+        // Small deadband to avoid thrashing on tiny numeric noise.
+        if (Math.abs(scale - last) < 0.01) return;
+
+        lastRestScaleRef.current = scale;
+        applyRestScaleToAllPolylines(scale);
+      });
+    });
+  };
+
+  try {
+    idleListener = map.addListener("idle", onIdle);
+  } catch {
+    // ignore
+  }
+
+  // Apply once right away, in case the map is already settled at a fractional zoom.
+  try {
+    onIdle();
+  } catch {
+    // ignore
+  }
+
+  return () => {
+    try {
+      idleListener?.remove?.();
+    } catch {}
+  };
+}, [enabled, map]);
+
+useEffect(() => {
+    if (!enabled || !map) return;
+
+    let listener = null;
+    let t = null;
+
+    const scheduleAltRedraw = () => {
+      try {
+        if (t) clearTimeout(t);
+      } catch {
+        // ignore
+      }
+
+      t = setTimeout(() => {
+        try {
+          const hybrid = hybridOptionsRef.current;
+          const sel = selectedIdxRef.current ?? 0;
+          if (hybrid?.length) {
+            drawHybridAlternates(hybrid, sel);
+            return;
+          }
+
+          const full = fullDirectionsRef.current;
+          if (full?.routes?.length > 1) {
+            drawAlternatePolylines(full, sel);
+          }
+        } catch {
+          // ignore
+        }
+      }, 120);
+    };
+
+    try {
+      listener = map.addListener("zoom_changed", scheduleAltRedraw);
+    } catch {
+      // ignore
+    }
+
+    return () => {
+      try {
+        listener?.remove?.();
+      } catch {
+        // ignore
+      }
+      try {
+        if (t) clearTimeout(t);
+      } catch {
+        // ignore
+      }
+    };
+  }, [enabled, map]);
+
+
   
 function hardResetMainRenderer({ reattach = true, clearPanel = false } = {}) {
   const dr = rendererRef.current;
@@ -1876,11 +2707,197 @@ function hardResetMainRenderer({ reattach = true, clearPanel = false } = {}) {
       // ignore
     }
     try {
-      dr.setPanel?.(panelRef?.current ?? undefined);
+      // Respect clearPanel on reattach so hybrid modes can keep the panel detached.
+      dr.setPanel?.(clearPanel ? null : panelRef?.current ?? undefined);
     } catch {
       // ignore
     }
   }
+}
+
+function configureMainRendererForNormal() {
+  const dr = rendererRef.current;
+  if (!dr) return;
+  try {
+    dr.setOptions?.({
+      draggable: true,
+      suppressMarkers: true,
+      hideRouteList: true,
+      preserveViewport: true,
+      // Keep the renderer polyline invisible but draggable/selectable.
+      polylineOptions: { strokeOpacity: 0, strokeWeight: 10 },
+    });
+  } catch {
+    // ignore
+  }
+  try {
+    dr.setPanel?.(panelRef?.current ?? undefined);
+  } catch {
+    // ignore
+  }
+  try {
+    dr.setMap?.(map);
+  } catch {
+    // ignore
+  }
+}
+
+function configureMainRendererForHybrid() {
+  const dr = rendererRef.current;
+  if (!dr) return;
+  try {
+    dr.setOptions?.({
+      draggable: false,
+      suppressMarkers: true,
+      hideRouteList: true,
+      preserveViewport: true,
+      // We only want Google's transit glyphs/route shields; keep the underlying polyline invisible
+      // and non-interactive so it doesn't interfere with our custom overlays.
+      polylineOptions: { strokeOpacity: 0, strokeWeight: 10, clickable: false },
+    });
+  } catch {
+    // ignore
+  }
+  // Hybrid UI hides the Google panel; keep it detached even if the renderer exists.
+  try {
+    dr.setPanel?.(null);
+  } catch {
+    // ignore
+  }
+  try {
+    dr.setMap?.(map);
+  } catch {
+    // ignore
+  }
+}
+
+
+function cloneWithProto(obj) {
+  if (!obj) return obj;
+  try {
+    return Object.assign(Object.create(Object.getPrototypeOf(obj)), obj);
+  } catch {
+    // Fallback: plain clone
+    try {
+      return { ...obj };
+    } catch {
+      return obj;
+    }
+  }
+}
+
+// In hybrid modes we keep the main DirectionsRenderer around ONLY for Google's transit glyphs/labels.
+// Unfortunately, Google also draws dotted WALK connectors for TRANSIT routes.
+// To keep the transit glyphs while removing the walk dots, we feed the renderer a "transit-only"
+// clone of the base route: remove WALK steps + rebuild overview_path from TRANSIT step geometry.
+function buildTransitOnlyRouteForGlyphs(baseRoute) {
+  try {
+    const route = baseRoute;
+    const legs = route?.legs ?? [];
+    if (!legs.length) return route;
+
+    const leg0 = legs[0];
+    const steps = leg0?.steps ?? [];
+    const transitSteps = steps.filter((s) => s?.travel_mode === "TRANSIT");
+    if (!transitSteps.length) return route;
+
+    // Build a path from TRANSIT steps only (removes all walking geometry).
+    const outPath = [];
+    for (const st of transitSteps) {
+      const seg = decodeStepPath(st);
+      if (!seg?.length) continue;
+      if (!outPath.length) {
+        outPath.push(...seg);
+      } else {
+        // Avoid duplicating the joint point if it matches.
+        const last = outPath[outPath.length - 1];
+        const first = seg[0];
+        const joinDist = haversineMeters(last, first);
+        if (Number.isFinite(joinDist) && joinDist < 0.75) outPath.push(...seg.slice(1));
+        else outPath.push(...seg);
+      }
+    }
+
+    const newLeg0 = cloneWithProto(leg0);
+    newLeg0.steps = transitSteps;
+
+    // Align leg start/end so the renderer doesn't try to "helpfully" draw connectors.
+    const firstT = transitSteps[0];
+    const lastT = transitSteps[transitSteps.length - 1];
+    if (firstT?.start_location) newLeg0.start_location = firstT.start_location;
+    if (lastT?.end_location) newLeg0.end_location = lastT.end_location;
+
+    // Update summary numbers (not strictly required for glyphs, but keeps things coherent).
+    const dist = transitSteps.reduce((sum, s) => sum + (s?.distance?.value ?? 0), 0);
+    const dur = transitSteps.reduce((sum, s) => sum + (s?.duration?.value ?? 0), 0);
+    if (Number.isFinite(dist)) newLeg0.distance = { ...(newLeg0.distance ?? {}), value: dist };
+    if (Number.isFinite(dur)) newLeg0.duration = { ...(newLeg0.duration ?? {}), value: dur };
+
+    const newRoute = cloneWithProto(route);
+    newRoute.legs = [newLeg0, ...legs.slice(1)];
+
+    if (outPath.length) {
+      newRoute.overview_path = outPath;
+      try {
+        const enc = window.google?.maps?.geometry?.encoding?.encodePath;
+        if (enc) {
+          newRoute.overview_polyline = {
+            ...(newRoute.overview_polyline ?? {}),
+            points: enc(outPath),
+          };
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // Keep original bounds to avoid surprising viewport changes.
+    newRoute.bounds = route.bounds;
+
+    return newRoute;
+  } catch {
+    return baseRoute;
+  }
+}
+
+function syncHybridTransitGlyphs(option, seq) {
+  const dr = rendererRef.current;
+  if (!dr || !map) return;
+
+  // Only HYBRID options have a TRANSIT base route/result.
+  const baseResult = option?.baseResult;
+  const baseRoute = option?.baseRoute;
+  const hasTransit =
+    option?.kind === "HYBRID" ||
+    Boolean(option?.segments?.some?.((s) => s?.mode === "TRANSIT"));
+
+  if (!hasTransit || !baseResult || !baseRoute) {
+    // Some Maps JS builds can leave transit glyphs behind unless we detach/reattach.
+    hardResetMainRenderer({ reattach: true, clearPanel: true });
+    configureMainRendererForHybrid();
+    return;
+  }
+
+  configureMainRendererForHybrid();
+
+  // Feed a single-route DirectionsResult to the renderer.
+  // This preserves the transit "route shields"/labels on the map without us having to
+  // reimplement them (and without showing Google's polylines).
+  const glyphRoute = buildTransitOnlyRouteForGlyphs(baseRoute);
+
+  const single = { ...baseResult, routes: [glyphRoute ?? baseRoute] };
+
+  // Guard against the main directions_changed handler.
+  programmaticUpdateRef.current = true;
+  try {
+    dr.setDirections(single);
+  } catch {
+    // ignore
+  }
+
+  setTimeout(() => {
+    if (!isStaleSeq(seq)) programmaticUpdateRef.current = false;
+  }, 0);
 }
 
 

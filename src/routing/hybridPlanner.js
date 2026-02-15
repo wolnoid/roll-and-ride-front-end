@@ -81,6 +81,183 @@ async function routeOnce(ds, req) {
   return await ds.route(req);
 }
 
+function latLngKey(ll) {
+  try {
+    const lat = typeof ll?.lat === "function" ? ll.lat() : ll?.lat;
+    const lng = typeof ll?.lng === "function" ? ll.lng() : ll?.lng;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "";
+    return `${lat.toFixed(5)},${lng.toFixed(5)}`;
+  } catch {
+    return "";
+  }
+}
+
+function firstTransitStep(route) {
+  const steps = route?.legs?.[0]?.steps ?? [];
+  for (let i = 0; i < steps.length; i++) {
+    if (steps[i]?.travel_mode === "TRANSIT") return { step: steps[i], index: i, steps };
+  }
+  return { step: null, index: -1, steps };
+}
+
+function walkAccessSecondsToFirstTransit(route) {
+  const { index, steps } = firstTransitStep(route);
+  if (index <= 0) return 0;
+  let sec = 0;
+  for (let i = 0; i < index; i++) {
+    const st = steps[i];
+    // Usually WALKING, but be tolerant.
+    sec += st?.duration?.value ?? 0;
+  }
+  return sec;
+}
+
+function routeSignature(route) {
+  const steps = route?.legs?.[0]?.steps ?? [];
+  const parts = [];
+  for (const st of steps) {
+    if (st?.travel_mode !== "TRANSIT") continue;
+    const td = getTransitDetailsFromStep(st);
+    const line = td?.line;
+    const lineName = line?.short_name || line?.name || "";
+    const depStop = td?.departure_stop?.name || "";
+    const depMs = coerceDate(td?.departure_time)?.getTime?.() ?? "";
+    parts.push(`${lineName}|${depStop}|${depMs}`);
+  }
+  return parts.join(">") || (route?.summary ?? "");
+}
+
+async function microAccessSecondsToStop({ ds, origin, stopLoc, combo, cache }) {
+  const key = `${combo}:${latLngKey(stopLoc)}`;
+  if (key && cache?.has(key)) return cache.get(key);
+
+  // Prefer bicycling geometry for both TRANSIT_BIKE and TRANSIT_SKATE (skate derives time from bike).
+  let bikeSec = Infinity;
+  try {
+    const bikeRes = await routeOnce(ds, {
+      origin,
+      destination: stopLoc,
+      travelMode: "BICYCLING",
+      provideRouteAlternatives: false,
+    });
+    const r = bikeRes?.routes?.[0];
+    const tot = r ? routeTotals(r) : { dur: Infinity };
+    bikeSec = tot.dur;
+  } catch {
+    // ignore
+  }
+
+  // If biking fails, fall back to walking.
+  let walkSec = Infinity;
+  if (!Number.isFinite(bikeSec) || bikeSec === Infinity) {
+    try {
+      const walkRes = await routeOnce(ds, {
+        origin,
+        destination: stopLoc,
+        travelMode: "WALKING",
+        provideRouteAlternatives: false,
+      });
+      const r = walkRes?.routes?.[0];
+      const tot = r ? routeTotals(r) : { dur: Infinity };
+      walkSec = tot.dur;
+    } catch {
+      // ignore
+    }
+  }
+
+  let sec = bikeSec;
+  if (!Number.isFinite(sec) || sec === Infinity) sec = walkSec;
+  if (combo === ROUTE_COMBO.TRANSIT_SKATE) sec = skateSecondsFromGoogleBikeSeconds(sec);
+
+  if (key && cache) cache.set(key, sec);
+  return sec;
+}
+
+function insertWaitsAndRecompute({ departTime, segments }) {
+  const segs = (segments ?? []).filter((s) => s && s.mode !== "WAIT");
+  const out = [];
+  let totalSec = 0;
+  let totalDist = 0;
+  let currentTime = departTime instanceof Date ? new Date(departTime) : null;
+
+  for (const seg of segs) {
+    if (seg.mode === "TRANSIT") {
+      const dep =
+        coerceDate(seg.transitDetails?.departure_time) ??
+        coerceDate(getTransitDetailsFromStep(seg.step)?.departure_time);
+
+      if (currentTime && dep && currentTime < dep) {
+        const waitSec = (dep.getTime() - currentTime.getTime()) / 1000;
+        if (waitSec > 20) {
+          out.push({
+            mode: "WAIT",
+            seconds: waitSec,
+            distanceMeters: 0,
+            atStop: seg.transitDetails?.departure_stop,
+          });
+          totalSec += waitSec;
+        }
+        currentTime = dep;
+      }
+
+      out.push(seg);
+      totalSec += seg.seconds ?? 0;
+      totalDist += seg.distanceMeters ?? 0;
+      if (currentTime)
+        currentTime = new Date(currentTime.getTime() + (seg.seconds ?? 0) * 1000);
+      continue;
+    }
+
+    out.push(seg);
+    totalSec += seg.seconds ?? 0;
+    totalDist += seg.distanceMeters ?? 0;
+    if (currentTime)
+      currentTime = new Date(currentTime.getTime() + (seg.seconds ?? 0) * 1000);
+  }
+
+  return {
+    segments: out,
+    durationSec: totalSec,
+    distanceMeters: totalDist,
+    arriveTime: currentTime,
+  };
+}
+
+function compressFirstStopWait({ option, transitTime, now }) {
+  const segs = option?.segments ?? [];
+  const firstTransit = segs.find((s) => s?.mode === "TRANSIT") ?? null;
+  const dep =
+    coerceDate(firstTransit?.transitDetails?.departure_time) ??
+    coerceDate(getTransitDetailsFromStep(firstTransit?.step)?.departure_time);
+  if (!dep) return option;
+
+  // Access time excludes waits.
+  let accessSec = 0;
+  for (const s of segs) {
+    if (!s || s.mode === "WAIT") continue;
+    if (s.mode === "TRANSIT") break;
+    accessSec += s.seconds ?? 0;
+  }
+
+  const kind = transitTime?.kind ?? "NOW";
+  const dt =
+    transitTime?.date instanceof Date &&
+    !Number.isNaN(transitTime.date.getTime())
+      ? transitTime.date
+      : null;
+  const minAllowed = kind === "DEPART_AT" && dt ? dt : now;
+  const recommended = new Date(dep.getTime() - accessSec * 1000);
+  const departTime = recommended < minAllowed ? minAllowed : recommended;
+
+  const rebuilt = insertWaitsAndRecompute({ departTime, segments: segs });
+  return {
+    ...option,
+    ...rebuilt,
+    departTime,
+    arriveTime: rebuilt.arriveTime ?? option.arriveTime,
+  };
+}
+
 function routeTotals(route) {
   const legs = route?.legs ?? [];
   const dist = legs.reduce((s, l) => s + (l?.distance?.value ?? 0), 0);
@@ -108,9 +285,10 @@ function skateSecondsFromWalkSeconds(walkSec) {
 export function polylineStyleForMode(mode, { isAlt = false } = {}) {
   const strokeColor = isAlt ? ALT_GRAY : GOOGLE_BLUE;
   const strokeWeight = isAlt ? 6 : 8;
-  const strokeOpacity = isAlt ? 0.35 : 1;
+  // Alternates should stay in the background, but still be readable.
+  const strokeOpacity = isAlt ? 0.6 : 1;
 
-  // NOTE: dashed/dotted is done via icons so we can match Google-like patterns.
+  // NOTE: dotted is done via icons so we can match Google-like walking patterns.
   if (mode === "WALK") {
     return {
       strokeOpacity: 0,
@@ -121,8 +299,11 @@ export function polylineStyleForMode(mode, { isAlt = false } = {}) {
           icon: {
             path: window.google.maps.SymbolPath.CIRCLE,
             scale: 2,
+            fillColor: strokeColor,
+            fillOpacity: 1,
             strokeColor,
-            strokeOpacity: 1,
+            strokeOpacity: 0,
+            strokeWeight: 0,
           },
           offset: "0",
           repeat: "10px",
@@ -131,28 +312,7 @@ export function polylineStyleForMode(mode, { isAlt = false } = {}) {
     };
   }
 
-  if (mode === "SKATE") {
-    return {
-      strokeOpacity: 0,
-      strokeColor,
-      strokeWeight,
-      icons: [
-        {
-          icon: {
-            // Dotted like WALK, but slightly larger and wider spacing.
-            path: window.google.maps.SymbolPath.CIRCLE,
-            scale: 2.4,
-            strokeColor,
-            strokeOpacity: 1,
-          },
-          offset: "0",
-          repeat: "12px",
-        },
-      ],
-    };
-  }
-
-  // BIKE (solid)
+  // BIKE + SKATE are solid (same visual treatment).
   return { strokeColor, strokeOpacity, strokeWeight };
 }
 
@@ -168,6 +328,8 @@ export async function buildHybridOptions({
   const tDate = transitTime?.date instanceof Date && !Number.isNaN(transitTime.date.getTime()) ? transitTime.date : null;
   const now = new Date();
 
+  const accessCache = new Map();
+
   // Transit alternatives
   const transitReq = {
     origin,
@@ -179,8 +341,71 @@ export async function buildHybridOptions({
   if (kind === "ARRIVE_BY" && tDate) transitReq.transitOptions = { arrivalTime: tDate };
   else if (kind === "DEPART_AT" && tDate) transitReq.transitOptions = { departureTime: tDate };
 
-  const transitResult = await routeOnce(ds, transitReq);
-  const transitRoutes = transitResult?.routes ?? [];
+  // --- Transit alternatives (optionally 2-pass in DEPART_AT to surface earlier vehicles
+  //     that become reachable when the access leg is BIKE/SKATE instead of WALK).
+  const transitResult1 = await routeOnce(ds, transitReq);
+  const transitRoutes1 = transitResult1?.routes ?? [];
+  let transitCandidates = transitRoutes1.map((r) => ({ route: r, result: transitResult1 }));
+
+  if (kind === "DEPART_AT" && tDate && (combo === ROUTE_COMBO.TRANSIT_BIKE || combo === ROUTE_COMBO.TRANSIT_SKATE) && transitCandidates.length) {
+    // Compute how much faster micro-mobility is vs Google's walking-to-first-stop,
+    // then back-shift the query by that delta to surface earlier departures.
+    let maxDeltaSec = 0;
+    const sample = transitCandidates.slice(0, Math.min(4, transitCandidates.length));
+
+    for (const cand of sample) {
+      const tr = cand.route;
+      const walkAccessSec = walkAccessSecondsToFirstTransit(tr);
+      const ft = firstTransitStep(tr);
+      const stopLoc = ft?.step?.start_location ?? null;
+      if (!stopLoc || !Number.isFinite(walkAccessSec) || walkAccessSec <= 0) continue;
+
+      const microSec = await microAccessSecondsToStop({
+        ds,
+        origin,
+        stopLoc,
+        combo,
+        cache: accessCache,
+      });
+
+      if (!Number.isFinite(microSec) || microSec <= 0) continue;
+      const delta = walkAccessSec - microSec;
+      if (delta > maxDeltaSec) maxDeltaSec = delta;
+    }
+
+    // Only worth a second query if micro access materially beats walking.
+    if (maxDeltaSec >= 60) {
+      const BUFFER_SEC = 60;
+      const CAP_SEC = 25 * 60;
+      const shiftSec = Math.min(CAP_SEC, Math.ceil(maxDeltaSec + BUFFER_SEC));
+
+      const earlier = new Date(tDate.getTime() - shiftSec * 1000);
+      const clampedEarlier = earlier < now ? now : earlier;
+
+      const transitReq2 = {
+        ...transitReq,
+        transitOptions: { departureTime: clampedEarlier },
+      };
+
+      try {
+        const transitResult2 = await routeOnce(ds, transitReq2);
+        const transitRoutes2 = transitResult2?.routes ?? [];
+
+        const seen = new Set(transitCandidates.map((c) => routeSignature(c.route)));
+        // Put earlier-query routes first so they have a chance to be expanded.
+        const merged = [];
+        for (const r of transitRoutes2) {
+          const sig = routeSignature(r);
+          if (seen.has(sig)) continue;
+          seen.add(sig);
+          merged.push({ route: r, result: transitResult2 });
+        }
+        transitCandidates = [...merged, ...transitCandidates];
+      } catch {
+        // ignore (fallback to 1-pass)
+      }
+    }
+  }
 
   // Direct bike alternatives (for BIKE and TRANSIT_BIKE) and as an input to direct skate.
   const bikeReq = {
@@ -272,10 +497,13 @@ export async function buildHybridOptions({
   // Build hybrid options from transit alternatives.
   // We don't fully expand all 6 transit alternatives to avoid an explosion of micro queries.
   // We'll expand up to 4, then rely on direct options to fill the list to 6.
-  const expandTransitLimit = Math.min(transitRoutes.length, 4);
+  // We don't fully expand all transit alternatives to avoid an explosion of micro queries.
+  const expandTransitLimit = Math.min(transitCandidates.length, 4);
 
   for (let i = 0; i < expandTransitLimit; i++) {
-    const tr = transitRoutes[i];
+    const cand = transitCandidates[i];
+    const tr = cand?.route;
+    const baseResult = cand?.result ?? transitResult1;
     const legs = tr?.legs ?? [];
     if (!legs.length) continue;
 
@@ -389,10 +617,10 @@ export async function buildHybridOptions({
     const departTime = tripStart;
     const arriveTime = currentTime;
 
-    options.push({
+    let opt = {
       kind: "HYBRID",
       baseRoute: tr,
-      baseResult: transitResult,
+      baseResult,
       departTime,
       arriveTime,
       distanceMeters: totalDist,
@@ -400,7 +628,13 @@ export async function buildHybridOptions({
       summary: tr?.summary ?? "Transit",
       segments,
       sidebarSegments: toSidebarSegments(segments),
-    });
+    };
+
+    // Critical: After swapping WALK steps for BIKE/SKATE micro legs, update the trip start time
+    // so we don't show "leave earlier just to wait at the first stop".
+    opt = compressFirstStopWait({ option: opt, transitTime, now });
+    opt.sidebarSegments = toSidebarSegments(opt.segments);
+    options.push(opt);
   }
 
   // Include direct option unless taxing AND we already have enough other options.
@@ -429,15 +663,21 @@ export async function buildHybridOptions({
       const aDep = a.departTime?.getTime?.() ?? 0;
       const bDep = b.departTime?.getTime?.() ?? 0;
       if (aDep !== bDep) return bDep - aDep; // latest departure first
+      const aDur = a.durationSec ?? 0;
+      const bDur = b.durationSec ?? 0;
+      if (aDur !== bDur) return aDur - bDur; // shortest duration first (your preference)
       const aArr = a.arriveTime?.getTime?.() ?? 0;
       const bArr = b.arriveTime?.getTime?.() ?? 0;
-      return aArr - bArr;
+      return bArr - aArr; // if still tied, arrive as late as possible
     });
   } else {
     options.sort((a, b) => {
       const aArr = a.arriveTime?.getTime?.() ?? (a.departTime?.getTime?.() ?? 0) + a.durationSec * 1000;
       const bArr = b.arriveTime?.getTime?.() ?? (b.departTime?.getTime?.() ?? 0) + b.durationSec * 1000;
       if (aArr !== bArr) return aArr - bArr;
+      const aDep = a.departTime?.getTime?.() ?? 0;
+      const bDep = b.departTime?.getTime?.() ?? 0;
+      if (aDep !== bDep) return bDep - aDep; // latest departure first (tie-break)
       return (a.durationSec ?? 0) - (b.durationSec ?? 0);
     });
   }
