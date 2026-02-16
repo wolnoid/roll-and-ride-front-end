@@ -167,7 +167,10 @@ function SegmentHeader({ seg }) {
 
   if (seg.mode === "TRANSIT") {
     const t = seg.transit || {};
-    const label = [t.vehicle, t.shortName].filter(Boolean).join(" ");
+    const vehicleWord = String(t.vehicle || "").trim();
+    const line = String(t.shortName || "").trim();
+    const v = vehicleWord ? vehicleWord.toLowerCase() : "";
+    const label = line ? (v ? `${line} ${v}` : line) : (v || "Transit");
     return (
       <div className={styles.segHeader}>
         <div className={styles.segTitle}>

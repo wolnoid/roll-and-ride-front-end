@@ -18,6 +18,22 @@ import RouteDetails from "../RouteDetails/RouteDetails.jsx";
 
 const LS_KEY = "carpool.sidebarCollapsed";
 
+function BackIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+      <path
+        d="M14.5 5.5L8 12l6.5 6.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+
 
 // --- Sidebar route-card helpers (UI only) ---
 const MODE_META = {
@@ -77,6 +93,30 @@ function transitLabel(transitDetails) {
   const line = transitDetails?.line;
   // Per requirement: short_name only. If absent, keep it generic.
   return line?.short_name || line?.shortName || "Transit";
+}
+
+
+function transitModeWordFromType(typeOrName) {
+  const t = String(typeOrName || "").toUpperCase();
+  if (!t) return "";
+  if (t.includes("BUS")) return "bus";
+  if (t.includes("TRAM") || t.includes("LIGHT_RAIL")) return "tram";
+  if (t.includes("SUBWAY") || t.includes("METRO") || t.includes("HEAVY_RAIL")) return "subway";
+  if (t.includes("FERRY")) return "ferry";
+  if (t.includes("CABLE_CAR")) return "cable car";
+  if (t.includes("GONDOLA")) return "gondola";
+  if (t.includes("FUNICULAR")) return "funicular";
+  if (t.includes("MONORAIL")) return "monorail";
+  if (t.includes("RAIL") || t.includes("TRAIN")) return "train";
+  return "";
+}
+
+function transitLineWithMode(transitDetails) {
+  const line = transitLabel(transitDetails);
+  const mode = transitModeWordFromType(transitVehicleType(transitDetails));
+
+  if (line && line !== "Transit" && mode) return `${line} ${mode}`;
+  return line || mode || "Transit";
 }
 
 
@@ -158,6 +198,25 @@ function extractPrimaryPathNameFromSteps(steps) {
   return "";
 }
 
+function flattenGoogleStepList(steps) {
+  const arr = Array.isArray(steps) ? steps : [];
+  const out = [];
+
+  for (const st of arr) {
+    const subs = Array.isArray(st?.steps) && st.steps.length ? st.steps : [st];
+    for (const sub of subs) {
+      out.push({
+        html: sub?.instructions || sub?.html_instructions || "",
+        distanceText: sub?.distance?.text || "",
+        durationText: sub?.duration?.text || "",
+      });
+    }
+  }
+
+  return out;
+}
+
+
 function segMinutes(sec) {
   const m = Math.max(0, Math.round((Number(sec) || 0) / 60));
   return `${m}m`;
@@ -203,7 +262,7 @@ function buildSidebarSegmentsFromHybridOption(option) {
     if (mode === "TRANSIT") {
       const td = seg?.transitDetails || seg?.step?.transit || seg?.step?.transit_details || seg?.transit || seg?.transit_details || null;
       const explicit = getExplicitLineColor(td);
-      const label = transitLabel(td);
+      const label = transitLineWithMode(td);
       const glyph = vehicleGlyphFromType(transitVehicleType(td));
       out.push({
         key: `t-${i}`,
@@ -424,7 +483,10 @@ function buildRouteDetailsModel(option) {
 
         const tLabel = transitLabel(td);
         const vType = transitVehicleType(td);
-        const vehicleName = (String(vType || "").toUpperCase().includes("BUS") ? "Bus" : (String(vType || "").toUpperCase().includes("TRAM") || String(vType || "").toUpperCase().includes("LIGHT_RAIL") ? "Tram" : (String(vType || "").toUpperCase().includes("SUBWAY") || String(vType || "").toUpperCase().includes("METRO") ? "Subway" : (String(vType || "").toUpperCase().includes("TRAIN") || String(vType || "").toUpperCase().includes("RAIL") ? "Train" : "Transit"))));
+        const vehicleWord = transitModeWordFromType(vType);
+        const lineWithMode = tLabel && tLabel !== "Transit" && vehicleWord
+          ? `${tLabel} ${vehicleWord}`
+          : (tLabel || vehicleWord || "Transit");
 
         const depStop = td?.departure_stop?.name || td?.departure_stop?.short_name || td?.departure_stop;
         const arrStop = td?.arrival_stop?.name || td?.arrival_stop?.short_name || td?.arrival_stop;
@@ -432,7 +494,7 @@ function buildRouteDetailsModel(option) {
         const steps = [];
         if (depStop) steps.push({ html: `Board at <b>${depStop}</b>`, distanceText: "", durationText: "" });
         steps.push({
-          html: `Ride <b>${vehicleName} ${tLabel}</b>${td?.headsign ? ` toward <b>${td.headsign}</b>` : ""}`,
+          html: `Ride <b>${lineWithMode}</b>${td?.headsign ? ` toward <b>${td.headsign}</b>` : ""}`,
           distanceText: "",
           durationText: td?.num_stops ? `${td.num_stops} stops` : segMinutes(seg?.seconds ?? 0),
         });
@@ -448,7 +510,7 @@ function buildRouteDetailsModel(option) {
           startTime: depT,
           endTime: arrT,
           transit: {
-            vehicle: vehicleName,
+            vehicle: vehicleWord,
             shortName: tLabel,
             agency: transitServiceName(td),
             headsign: td?.headsign || "",
@@ -471,11 +533,7 @@ function buildRouteDetailsModel(option) {
 
       // Pull turn-by-turn from the underlying sub-route if present.
       const leg = seg?.route?.legs?.[0];
-      const steps = (leg?.steps ?? []).map((st) => ({
-        html: st?.instructions || st?.html_instructions || "",
-        distanceText: st?.distance?.text || "",
-        durationText: st?.duration?.text || "",
-      }));
+      const steps = flattenGoogleStepList(leg?.steps ?? []);
 
       route.segments.push({
         id: `m-${i}`,
@@ -557,7 +615,10 @@ function buildRouteDetailsModel(option) {
 
         const tLabel = transitLabel(td);
         const vType = transitVehicleType(td);
-        const vehicleName = (String(vType || "").toUpperCase().includes("BUS") ? "Bus" : (String(vType || "").toUpperCase().includes("TRAM") || String(vType || "").toUpperCase().includes("LIGHT_RAIL") ? "Tram" : (String(vType || "").toUpperCase().includes("SUBWAY") || String(vType || "").toUpperCase().includes("METRO") ? "Subway" : (String(vType || "").toUpperCase().includes("TRAIN") || String(vType || "").toUpperCase().includes("RAIL") ? "Train" : "Transit"))));
+        const vehicleWord = transitModeWordFromType(vType);
+        const lineWithMode = tLabel && tLabel !== "Transit" && vehicleWord
+          ? `${tLabel} ${vehicleWord}`
+          : (tLabel || vehicleWord || "Transit");
 
         const depStop = td?.departure_stop?.name || td?.departure_stop?.short_name || td?.departure_stop;
         const arrStop = td?.arrival_stop?.name || td?.arrival_stop?.short_name || td?.arrival_stop;
@@ -565,7 +626,7 @@ function buildRouteDetailsModel(option) {
         const pseudo = [];
         if (depStop) pseudo.push({ html: `Board at <b>${depStop}</b>`, distanceText: "", durationText: "" });
         pseudo.push({
-          html: `Ride <b>${vehicleName} ${tLabel}</b>${td?.headsign ? ` toward <b>${td.headsign}</b>` : ""}`,
+          html: `Ride <b>${lineWithMode}</b>${td?.headsign ? ` toward <b>${td.headsign}</b>` : ""}`,
           distanceText: "",
           durationText: td?.num_stops ? `${td.num_stops} stops` : (st?.duration?.text || ""),
         });
@@ -581,7 +642,7 @@ function buildRouteDetailsModel(option) {
           startTime: depT,
           endTime: arrT,
           transit: {
-            vehicle: vehicleName,
+            vehicle: vehicleWord,
             shortName: tLabel,
             agency: transitServiceName(td),
             headsign: td?.headsign || "",
@@ -614,11 +675,7 @@ function buildRouteDetailsModel(option) {
 
       group.durationSec += st?.duration?.value ?? 0;
       group.distanceMeters += st?.distance?.value ?? 0;
-      group.steps.push({
-        html: st?.instructions || st?.html_instructions || "",
-        distanceText: st?.distance?.text || "",
-        durationText: st?.duration?.text || "",
-      });
+      group.steps.push(...flattenGoogleStepList([st]));
 
       group.endTime = new Date(group.startTime.getTime() + group.durationSec * 1000);
       cursor = group.endTime;
@@ -929,11 +986,13 @@ function RouteCard({ option, selected, expanded, onSelect, onDetails, routeCombo
         const t = s.transit || {};
         const veh = vehicleGlyphFromType(t.vehicle || "");
         const line = String(t.shortName || "Transit").trim();
+        const modeWord = transitModeWordFromType(t.vehicle || "");
+        const lineWithMode = line && line !== "Transit" && modeWord ? `${line} ${modeWord}` : line;
         const agency = shortTransitAgencyName(t.agency || "");
 
-        // Requirement: show line/number first, then agency name.
-        if (line && agency && line !== "Transit") out.push(`${veh} ${dur} • ${line} • ${agency}`);
-        else if (line && line !== "Transit") out.push(`${veh} ${dur} • ${line}`);
+        // Requirement: show line/number first (with mode), then agency name.
+        if (lineWithMode && agency && lineWithMode !== "Transit") out.push(`${veh} ${dur} • ${lineWithMode} • ${agency}`);
+        else if (lineWithMode && lineWithMode !== "Transit") out.push(`${veh} ${dur} • ${lineWithMode}`);
         else if (agency) out.push(`${veh} ${dur} • ${agency}`);
         else out.push(`${veh} ${dur} • Transit`);
         continue;
@@ -1664,7 +1723,7 @@ export default function DirectionsSidebar({
                               onClick={() => setDetailsMode("NONE")}
                               aria-label="Back"
                             >
-                              ←
+                              <BackIcon />
                             </button>
 
                             <div className={styles.detailsTopRow}>
@@ -1699,8 +1758,8 @@ export default function DirectionsSidebar({
                                 onClick={() => setDetailsMode("NONE")}
                                 aria-label="Back"
                               >
-                                ←
-                              </button>
+                              <BackIcon />
+                            </button>
 
             <div className={styles.detailsTopRow}>
                                   <div className={styles.detailsTimes}>{timeRangeTextForOption(selectedOption)}</div>
