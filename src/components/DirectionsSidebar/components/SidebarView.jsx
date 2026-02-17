@@ -53,10 +53,6 @@ export function SidebarView(props) {
     detailsItinRef,
     detailsItinSegs,
     pickerSnapshotRef,
-
-    showSaveButton,
-    saveDisabled,
-    onOpenSaveModal,
   } = props;
 
   const detailsTimeText = selectedOption ? timeRangeTextForOption(selectedOption) : "";
@@ -242,18 +238,6 @@ export function SidebarView(props) {
             >
               Get directions
             </button>
-
-            {showSaveButton && (
-              <button
-                className={styles.secondaryBtn}
-                onClick={onOpenSaveModal}
-                type="button"
-                disabled={saveDisabled}
-                title={saveDisabled ? "Get directions first" : "Save this query as a bookmark"}
-              >
-                Save
-              </button>
-            )}
             <button className={styles.secondaryBtn} onClick={onClearRoute} type="button">
               Clear
             </button>

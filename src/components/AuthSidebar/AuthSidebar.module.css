@@ -1,0 +1,311 @@
+.sidebar {
+  --sidebar-w: 320px;
+
+  width: var(--sidebar-w);
+  min-width: var(--sidebar-w);
+  max-width: var(--sidebar-w);
+  flex: 0 0 var(--sidebar-w);
+
+  height: 100%;
+  position: relative;
+  z-index: 30;
+
+  display: flex;
+  flex-direction: column;
+
+  border-left: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: none;
+  transition: width 160ms ease, min-width 160ms ease, max-width 160ms ease, flex-basis 160ms ease;
+
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overflow: visible;
+}
+
+.sidebarBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sidebarTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, 0.7);
+  text-align: center;
+}
+
+.linkStack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.navLink,
+.navBtn {
+  width: 100%;
+  min-height: 44px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background: rgba(0, 0, 0, 0.05);
+  color: rgba(0, 0, 0, 0.8);
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.navLink:hover,
+.navBtn:hover {
+  background: rgba(0, 160, 223, 0.16);
+  border-color: rgba(0, 160, 223, 0.35);
+  transform: translateY(-1px);
+}
+
+.navLinkActive {
+  background: rgba(0, 160, 223, 0.28);
+  border-color: rgba(0, 122, 166, 0.5);
+  color: rgba(0, 90, 125, 0.96);
+}
+
+.navBtn {
+  font-family: inherit;
+}
+
+.profilePanel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.authPanel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.profileHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.profileTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, 0.72);
+  text-align: center;
+}
+
+.backBtn,
+.signOutBtn {
+  height: 32px;
+  min-width: 64px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  background: rgba(0, 0, 0, 0.04);
+  color: rgba(0, 0, 0, 0.8);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.backBtn:hover,
+.signOutBtn:hover {
+  background: rgba(0, 160, 223, 0.16);
+  border-color: rgba(0, 160, 223, 0.35);
+}
+
+.signOutBtn {
+  color: rgba(122, 8, 8, 0.96);
+  background: rgba(220, 0, 0, 0.08);
+  border-color: rgba(220, 0, 0, 0.25);
+}
+
+.saveRouteBtn {
+  height: 32px;
+  min-width: 140px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  background: rgba(0, 160, 223, 0.14);
+  color: rgba(0, 86, 116, 0.95);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.saveRouteBtn:hover {
+  background: rgba(0, 160, 223, 0.24);
+  border-color: rgba(0, 122, 166, 0.45);
+}
+
+.savePrompt {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background: rgba(255, 255, 255, 0.95);
+  display: grid;
+  gap: 8px;
+}
+
+.savePromptTitle {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, 0.72);
+}
+
+.saveField {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.78);
+}
+
+.saveInput,
+.saveTextarea {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  background: #fff;
+  color: rgba(0, 0, 0, 0.86);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 9px 10px;
+}
+
+.saveTextarea {
+  resize: vertical;
+}
+
+.saveError {
+  font-size: 12px;
+  color: rgba(160, 15, 15, 0.96);
+}
+
+.saveActions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.saveActionSecondary,
+.saveActionPrimary {
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  font-size: 12px;
+  font-weight: 800;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.saveActionSecondary {
+  background: rgba(255, 255, 255, 0.9);
+  color: rgba(0, 0, 0, 0.8);
+}
+
+.saveActionPrimary {
+  background: #00a0df;
+  color: #fff;
+}
+
+.saveActionSecondary:hover,
+.saveActionPrimary:hover {
+  transform: translateY(-1px);
+}
+
+.profileContent {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  margin-right: -8px;
+  padding-right: 8px;
+}
+
+.headerSpacer {
+  width: 64px;
+  height: 32px;
+}
+
+.sidebarCollapsed {
+  --sidebar-w: 10px;
+}
+
+.sidebarCollapsed .sidebarBody {
+  display: none;
+}
+
+.collapseNub {
+  position: absolute;
+  top: 50%;
+  left: -18px;
+  transform: translateY(-50%);
+  z-index: 40;
+
+  width: 18px;
+  height: 70px;
+  padding: 0;
+  margin: 0;
+
+  border: 1px solid rgba(60, 64, 67, 0.22);
+  border-right: none;
+  border-radius: 14px 0 0 14px;
+
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 1px 2px rgba(60, 64, 67, 0);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+
+  font-size: 0;
+  line-height: 0;
+}
+
+.collapseNub:hover {
+  background: rgb(233, 235, 238);
+}
+
+.collapseNubIcon {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  color: rgba(0, 0, 0, 0.72);
+}
+
+.collapseNubIcon svg {
+  display: block;
+}
+
+@media (max-width: 900px) {
+  .sidebar {
+    --sidebar-w: 250px;
+  }
+}

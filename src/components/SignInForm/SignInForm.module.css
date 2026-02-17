@@ -7,6 +7,11 @@
   font-family: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
 }
 
+.embeddedPage {
+  min-height: auto;
+  padding: 0;
+}
+
 .formPane {
   width: 100%;
   display: flex;
@@ -26,6 +31,13 @@
   gap: 14px;
   padding: 32px;
   text-align: center;
+}
+
+.embeddedForm {
+  max-width: none;
+  border-radius: 14px;
+  padding: 16px 14px;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.1);
 }
 
 .form h1 {
@@ -84,6 +96,41 @@
   grid-template-columns: 1fr 1fr;
   gap: 10px;
   margin-top: 8px;
+}
+
+.authSwitch {
+  margin: 4px 0 0;
+  color: #3b5f6e;
+  font-size: 0.92rem;
+  line-height: 1.4;
+  text-align: center;
+  opacity: 1;
+}
+
+.authSwitch a {
+  color: #0078ad;
+  font-weight: 700;
+  text-decoration: none;
+
+}
+
+.authSwitch a:hover {
+  text-decoration: underline;
+}
+
+.inlineLink {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  color: #0078ad;
+  font-weight: 700;
+  font-size: inherit;
+  text-decoration: none;
+}
+
+.inlineLink:hover {
+  text-decoration: underline;
 }
 
 .primaryButton,

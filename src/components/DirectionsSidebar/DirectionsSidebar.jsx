@@ -5,7 +5,7 @@ import { placeToLatLng } from "../../maps/directionsUtils";
 import { getPickerText, closePickerSuggestions } from "../../maps/placePicker";
 import { usePlacePickerChange } from "../../hooks/usePlacePickerChange";
 
-import { isTransitOn, isBikeOn, isSkateOn, nextCombo } from "../../routing/routeCombos";
+import { ROUTE_COMBO, isTransitOn, isBikeOn, isSkateOn, nextCombo } from "../../routing/routeCombos";
 import { buildRoutingSearch, parseRoutingSearch } from "../../routing/urlState";
 import { UserContext } from "../../contexts/UserContext";
 import * as savedDirectionsService from "../../services/savedDirectionsService";
@@ -16,8 +16,11 @@ import { useSidebarPickers } from "./hooks/useSidebarPickers";
 import { buildRouteDetailsModel } from "./model/routeDetailsModel";
 import { buildSidebarSegments } from "./utils/sidebarSegments";
 import { carryHiddenMinuteMovesExceptEnds, useItinerarySegmentsFit } from "./utils/itineraryFit";
-
-const LS_KEY = "carpool.sidebarCollapsed";
+import {
+  DIRECTIONS_SIDEBAR_EXPAND_EVENT,
+  DIRECTIONS_SIDEBAR_LS_KEY,
+  DIRECTIONS_SIDEBAR_OPEN_SAVE_EVENT,
+} from "../../utils/directionsSidebarState";
 
 export default function DirectionsSidebar({
   canRenderMap,
@@ -82,7 +85,7 @@ export default function DirectionsSidebar({
 
   const [collapsed, setCollapsed] = useState(() => {
     try {
-      return window.localStorage?.getItem(LS_KEY) === "1";
+      return window.localStorage?.getItem(DIRECTIONS_SIDEBAR_LS_KEY) === "1";
     } catch {
       return false;
     }
@@ -90,11 +93,18 @@ export default function DirectionsSidebar({
 
   useEffect(() => {
     try {
-      window.localStorage?.setItem(LS_KEY, collapsed ? "1" : "0");
+      window.localStorage?.setItem(DIRECTIONS_SIDEBAR_LS_KEY, collapsed ? "1" : "0");
     } catch {
       // ignore
     }
   }, [collapsed]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const handleExpandRequest = () => setCollapsed(false);
+    window.addEventListener(DIRECTIONS_SIDEBAR_EXPAND_EVENT, handleExpandRequest);
+    return () => window.removeEventListener(DIRECTIONS_SIDEBAR_EXPAND_EVENT, handleExpandRequest);
+  }, []);
 
   const startIconUrl = getStartIconUrl();
   const endIconUrl = getEndIconUrl();
@@ -228,13 +238,31 @@ export default function DirectionsSidebar({
     }
   }, []);
 
-  const computeAutoName = useCallback(() => {
-    const oText = getPickerLabel(originRef.current) || "Current location";
-    const dText = getPickerLabel(destRef.current) || "Destination";
-    return `${oText} → ${dText}`;
-  }, [getPickerLabel, originRef, destRef]);
+  const shortAddressLabel = useCallback((rawLabel, fallback) => {
+    const raw = String(rawLabel || fallback || "").trim();
+    if (!raw) return "";
+    const [head] = raw.split(",");
+    const trimmed = String(head || "").trim();
+    return trimmed || raw;
+  }, []);
 
-  const canSave = Boolean(user) && Boolean(destination) && Boolean(origin ?? userLoc);
+  const formatModeLabel = useCallback((combo) => {
+    const raw = String(combo || ROUTE_COMBO.TRANSIT).trim();
+    if (!raw) return "transit";
+    return raw
+      .toLowerCase()
+      .split(/[_+]+/)
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join(" + ");
+  }, []);
+
+  const computeAutoName = useCallback(() => {
+    const oText = shortAddressLabel(getPickerLabel(originRef.current), "Current location");
+    const dText = shortAddressLabel(getPickerLabel(destRef.current), "Destination");
+    const modeText = formatModeLabel(routeCombo);
+    return `${oText} → ${dText} by ${modeText}`;
+  }, [getPickerLabel, shortAddressLabel, formatModeLabel, originRef, destRef, routeCombo]);
 
   const openSave = useCallback(() => {
     if (!user) return;
@@ -253,6 +281,13 @@ export default function DirectionsSidebar({
     setSaveError(null);
     setSaveSaving(false);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const handleOpenSaveRequest = () => openSave();
+    window.addEventListener(DIRECTIONS_SIDEBAR_OPEN_SAVE_EVENT, handleOpenSaveRequest);
+    return () => window.removeEventListener(DIRECTIONS_SIDEBAR_OPEN_SAVE_EVENT, handleOpenSaveRequest);
+  }, [openSave]);
 
   const persistHashSid = useCallback((sid, searchOverride) => {
     if (typeof window === "undefined") return;
@@ -477,9 +512,6 @@ export default function DirectionsSidebar({
       detailsItinRef={detailsItinRef}
       detailsItinSegs={detailsItinSegs}
       pickerSnapshotRef={pickerSnapshotRef}
-      showSaveButton={Boolean(user)}
-      saveDisabled={!canSave}
-      onOpenSaveModal={openSave}
     />
       <SaveDirectionModal
         open={saveOpen}

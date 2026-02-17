@@ -1,10 +1,10 @@
 import { useState, useContext } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { signIn } from '../../services/authService';
 import { UserContext } from '../../contexts/UserContext';
 import styles from './SignInForm.module.css';
 
-const SignInForm = () => {
+const SignInForm = ({ embedded = false, onCancel, onSwitchToSignUp, onSuccess }) => {
   const navigate = useNavigate();
   const { setUser } = useContext(UserContext);
   const [message, setMessage] = useState('');
@@ -24,6 +24,7 @@ const SignInForm = () => {
     try {
       const signedInUser = await signIn(formData);
       setUser(signedInUser);
+      onSuccess?.(signedInUser);
       navigate('/');
     } catch (err) {
       setMessage(err.message);
@@ -34,10 +35,22 @@ const SignInForm = () => {
     return !(username && password);
   };
 
+  const handleCancel = () => {
+    if (embedded) {
+      onCancel?.();
+      return;
+    }
+    navigate('/');
+  };
+
   return (
-    <main className={styles.page}>
+    <main className={`${styles.page} ${embedded ? styles.embeddedPage : ''}`}>
       <section className={styles.formPane}>
-        <form className={styles.form} autoComplete='off' onSubmit={handleSubmit}>
+        <form
+          className={`${styles.form} ${embedded ? styles.embeddedForm : ''}`}
+          autoComplete='off'
+          onSubmit={handleSubmit}
+        >
           <h1>Sign In</h1>
           <p className={styles.message}>{message || 'Enter your account details to continue.'}</p>
           <div className={styles.field}>
@@ -73,11 +86,23 @@ const SignInForm = () => {
             <button
               className={styles.secondaryButton}
               type='button'
-              onClick={() => navigate('/')}
+              onClick={handleCancel}
             >
               Cancel
             </button>
           </div>
+          {embedded ? (
+            <p className={styles.authSwitch}>
+              Not a user?{' '}
+              <button type='button' className={styles.inlineLink} onClick={onSwitchToSignUp}>
+                Sign up
+              </button>
+            </p>
+          ) : (
+            <p className={styles.authSwitch}>
+              <Link to='/sign-up'>Not a user? Sign up</Link>
+            </p>
+          )}
         </form>
       </section>
     </main>

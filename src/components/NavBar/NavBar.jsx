@@ -1,17 +1,26 @@
 import { useContext } from 'react';
-import { Link } from 'react-router';
-import { UserContext } from '../../contexts/UserContext';
-import { clearToken } from "../../services/tokenService";
+import { useNavigate } from 'react-router';
 import styles from './NavBar.module.css';
 import Logo from '../../assets/images/logo1.png';
 import TextLogo from '../../assets/images/text1.png';
+import { UserContext } from '../../contexts/UserContext';
+import { clearToken } from '../../services/tokenService';
+import { requestAuthSidebarExpand } from '../../utils/authSidebarState';
 
 const NavBar = () => {
+  const navigate = useNavigate();
   const { user, setUser } = useContext(UserContext);
 
-  const handleSignOut = () => {
-    clearToken();
-    setUser(null);
+  const handleAuthClick = () => {
+    if (user) {
+      clearToken();
+      setUser(null);
+      navigate('/');
+      return;
+    }
+
+    requestAuthSidebarExpand();
+    navigate('/sign-in');
   };
 
   return (
@@ -27,17 +36,13 @@ const NavBar = () => {
       </div>
 
       <div className={styles.right}>
-        {user ? (
-          <ul>
-            <li><Link to='/saved'>My Profile</Link></li>
-            <li><Link to='/' onClick={handleSignOut}>Sign Out</Link></li>
-          </ul>
-        ) : (
-          <ul>
-            <li><Link to='/sign-up'>Sign Up</Link></li>
-            <li><Link to='/sign-in'>Sign In</Link></li>
-          </ul>
-        )}
+        <button
+          type='button'
+          className={`${styles.authBtn} ${user ? styles.authBtnSignOut : ''}`}
+          onClick={handleAuthClick}
+        >
+          {user ? 'Sign Out' : 'Sign In'}
+        </button>
       </div>
     </nav>
   );

@@ -1,7 +1,9 @@
 // src/components/Landing/Landing.jsx
 import { useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { useLocation } from "react-router";
 import styles from "./Landing.module.css";
 import DirectionsSidebar from "../DirectionsSidebar/DirectionsSidebar.jsx";
+import AuthSidebar from "../AuthSidebar/AuthSidebar.jsx";
 import { useGoogleMapsReady } from "../../hooks/useGoogleMapsReady";
 import { useGeolocation } from "../../hooks/useGeolocation";
 
@@ -23,6 +25,7 @@ import { toLatLngLiteral } from "../../maps/directionsUtils";
 const FALLBACK_CENTER = { lat: 40.749933, lng: -73.98633 };
 
 export default function Landing() {
+  const location = useLocation();
   const mapRef = useRef(null);
   const mapWrapRef = useRef(null);
 
@@ -110,8 +113,10 @@ export default function Landing() {
   );
   const initialUrlAppliedRef = useRef(false);
   const initialPickerSeededRef = useRef(false);
+  const initialGeoOriginSeededRef = useRef(false);
   const pendingAutorunRef = useRef(null);
   const autorunStartedRef = useRef(false);
+  const lastHandledSearchRef = useRef(location.search || "");
 
   const setOrigin = useCallback((next) => {
     const resolved = typeof next === "function" ? next(originRef.current) : next;
@@ -125,7 +130,7 @@ export default function Landing() {
     setDestinationState(resolved);
   }, []);
 
-  // Default origin state to geolocation for routing (no UI fill on load)
+  // Default origin state to geolocation for routing.
   useEffect(() => {
     if (userLoc) setOrigin((prev) => prev ?? userLoc);
   }, [userLoc, setOrigin]);
@@ -309,6 +314,74 @@ export default function Landing() {
       });
     }
   }, [canRenderMap]);
+
+  useEffect(() => {
+    if (!canRenderMap || !userLoc) return;
+    if (initialGeoOriginSeededRef.current) return;
+
+    const parsed = initialUrlStateRef.current;
+    if (parsed?.origin) {
+      initialGeoOriginSeededRef.current = true;
+      return;
+    }
+
+    initialGeoOriginSeededRef.current = true;
+    fromPrefill.prefillIfEmpty(userLoc);
+  }, [canRenderMap, fromPrefill, userLoc]);
+
+  useEffect(() => {
+    const nextSearch = location.search || "";
+    if (nextSearch === lastHandledSearchRef.current) return;
+    lastHandledSearchRef.current = nextSearch;
+
+    const parsed = parseRoutingSearch(nextSearch);
+    if (!parsed?.hasValidEndpoints) return;
+
+    const mode = parsed.mode ?? ROUTE_COMBO.TRANSIT;
+    routeComboRef.current = mode;
+    setRouteCombo(mode);
+
+    const normalizedWhen =
+      parsed.when?.kind === "DEPART_AT" || parsed.when?.kind === "ARRIVE_BY"
+        ? {
+            kind: parsed.when.kind,
+            date:
+              parsed.when.date instanceof Date &&
+              !Number.isNaN(parsed.when.date.getTime())
+                ? parsed.when.date
+                : new Date(),
+          }
+        : { kind: "NOW", date: null };
+
+    transitTimeRef.current = normalizedWhen;
+    setTimeKind(normalizedWhen.kind);
+    if (normalizedWhen.kind === "NOW") setTimeValue(new Date());
+    else setTimeValue(normalizedWhen.date);
+
+    if (parsed.origin) {
+      fromPrefill.markPicked();
+      setOrigin(parsed.origin);
+      populatePlacePickerFromLatLng(originPickerRef.current, parsed.origin).finally(() => {
+        closePickerSuggestions(originPickerRef.current);
+      });
+    }
+
+    if (parsed.destination) {
+      setDestination(parsed.destination);
+      populatePlacePickerFromLatLng(destPickerRef.current, parsed.destination).finally(() => {
+        closePickerSuggestions(destPickerRef.current);
+      });
+    }
+
+    pendingAutorunRef.current = {
+      origin: parsed.origin,
+      destination: parsed.destination,
+      via: parsed.via,
+      mode,
+      transitTime: normalizedWhen,
+    };
+    autorunStartedRef.current = false;
+  }, [fromPrefill, location.search, setDestination, setOrigin]);
 
   function prefillFromUserLocationIfNeeded() {
     const ul = userLocRef.current;
@@ -556,6 +629,7 @@ export default function Landing() {
               </div>
             )}
           </div>
+          <AuthSidebar />
         </div>
       )}
     </main>
