@@ -2,7 +2,6 @@ import { useState, useContext } from 'react';
 import { useNavigate } from 'react-router';
 import { signUp } from '../../services/authService';
 import { UserContext } from '../../contexts/UserContext';
-import SignUpIcon from '../../assets/images/signup.svg';
 import styles from './SignUpForm.module.css';
 
 const SignUpForm = () => {
@@ -38,28 +37,29 @@ const SignUpForm = () => {
   };
 
   return (
-    <main className={styles.container}>
-      <section>
-        <img src={SignUpIcon} alt='An owl sitting on a sign' />
-      </section>
-      <section>
-        <form onSubmit={handleSubmit}>
+    <main className={styles.page}>
+      <section className={styles.formPane}>
+        <form className={styles.form} autoComplete='off' onSubmit={handleSubmit}>
           <h1>Sign Up</h1>
-          <p>{message}</p>
-          <div>
-            <label htmlFor='username'>Username:</label>
+          <p className={styles.message}>
+            {message || 'Create an account to save directions for future reference'}
+          </p>
+          <div className={styles.field}>
+            <label htmlFor='username'>Username</label>
             <input
+              className={styles.input}
               type='text'
-              id='name'
+              id='username'
               value={username}
               name='username'
               onChange={handleChange}
               required
             />
           </div>
-          <div>
-            <label htmlFor='password'>Password:</label>
+          <div className={styles.field}>
+            <label htmlFor='password'>Password</label>
             <input
+              className={styles.input}
               type='password'
               id='password'
               value={password}
@@ -68,9 +68,10 @@ const SignUpForm = () => {
               required
             />
           </div>
-          <div>
-            <label htmlFor='confirm'>Confirm Password:</label>
+          <div className={styles.field}>
+            <label htmlFor='confirm'>Confirm Password</label>
             <input
+              className={styles.input}
               type='password'
               id='confirm'
               value={passwordConf}
@@ -79,9 +80,17 @@ const SignUpForm = () => {
               required
             />
           </div>
-          <div>
-            <button disabled={isFormInvalid()}>Sign Up</button>
-            <button onClick={() => navigate('/')}>Cancel</button>
+          <div className={styles.actions}>
+            <button className={styles.primaryButton} type='submit' disabled={isFormInvalid()}>
+              Sign Up
+            </button>
+            <button
+              className={styles.secondaryButton}
+              type='button'
+              onClick={() => navigate('/')}
+            >
+              Cancel
+            </button>
           </div>
         </form>
       </section>

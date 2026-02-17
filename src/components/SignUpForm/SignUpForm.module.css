@@ -1,102 +1,145 @@
-/* src/components/SignUpForm/SignUpForm.module.css */
-
-.container {
-  height: 100%;
+.page {
+  min-height: calc(100vh - 80px);
   display: flex;
-  align-items: center;
-}
-
-.container p {
-  margin: 0;
-  padding: 0px 0 10px;
-}
-
-.container img {
-  width: 65%;
-  max-width: 500px;
-}
-
-.container section {
-  width: 50%;
-  height: 100%;
-  display: flex;
-  padding: 28px 21px;
-  align-items: center;
-  flex-direction: column;
-}
-
-.container section:first-child {
-  height: 100%;
   align-items: center;
   justify-content: center;
-  background-color: #fdfeff;
+  padding: 24px;
+  font-family: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
 }
 
-.container section:nth-child(2) {
-  overflow: scroll;
+.formPane {
+  width: 100%;
+  display: flex;
+  align-items: center;
   justify-content: center;
 }
 
-.container input {
-  margin: 7px 0px 14px 0px;
-}
-
-.container input,
-button {
+.form {
   width: 100%;
-  padding: 14px;
-  font-size: 14px;
-  border-radius: 5px;
-  border: 1px solid rgb(220, 220, 220);
-}
-
-.container div {
-  width: 100%;
+  max-width: 540px;
+  border: 1px solid rgba(0, 0, 0, 0.09);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.13);
   display: flex;
   flex-direction: column;
-}
-
-.container label {
-  font-weight: 600;
-  margin: 7px 0px 14px 0px;
-}
-
-.container button {
-  color: white;
-  font-weight: 600;
-  background: #00a0df;
-  margin: 21px 0px 0px 0px;
-}
-
-.container a {
-  border: none;
-  font-size: 14px;
-  background: none;
-  font-weight: 500;
-  margin-top: 14px;
+  gap: 14px;
+  padding: 32px;
   text-align: center;
-  color: rgb(200, 200, 200);
 }
 
-input:focus {
+.form h1 {
+  margin: 2px 0 0;
+  font-size: 2rem;
+  color: #002c3c;
+  text-align: center;
+}
+
+.message {
+  margin: 0;
+  min-height: 24px;
+  color: #3b5f6e;
+  opacity: 1;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.field {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field label {
+  font-size: 0.88rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #145066;
+  text-align: center;
+}
+
+.input {
+  width: 100%;
+  padding: 13px 14px;
+  font-size: 1rem;
+  color: #122632;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  background: #ffffff;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  text-align: center;
+}
+
+.input:focus {
   outline: none;
-  border: 1px solid #00a0df;
+  border-color: #00a0df;
+  box-shadow: 0 0 0 3px rgba(0, 160, 223, 0.2);
 }
 
-@media only screen and (max-width: 912px) {
-  .container section {
-    width: 100%;
-  }
-  .container section:first-child {
-    display: none;
-  }
-  .container form {
-    min-width: 100%;
-  }
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 8px;
 }
 
-@media only screen and (max-height: 900px) {
-  .container section:nth-child(2) {
-    justify-content: flex-start;
+.primaryButton,
+.secondaryButton {
+  width: 100%;
+  border-radius: 12px;
+  padding: 12px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  border: 1px solid transparent;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+
+.primaryButton {
+  color: #ffffff;
+  background: #f5a623;
+  box-shadow: 0 8px 18px rgba(245, 166, 35, 0.32);
+}
+
+.primaryButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.secondaryButton {
+  color: #ffffff;
+  background: #00a0df;
+  border-color: rgba(0, 122, 166, 0.45);
+}
+
+.primaryButton:hover,
+.secondaryButton:hover {
+  transform: translateY(-1px);
+  filter: saturate(1.05);
+}
+
+.primaryButton:hover:not(:disabled) {
+  box-shadow: 0 10px 22px rgba(245, 166, 35, 0.38);
+}
+
+.secondaryButton:hover {
+  box-shadow: 0 8px 16px rgba(0, 160, 223, 0.28);
+}
+
+@media only screen and (max-width: 560px) {
+  .page {
+    padding: 18px;
+  }
+
+  .form {
+    border-radius: 18px;
+    padding: 24px 18px;
+  }
+
+  .actions {
+    grid-template-columns: 1fr;
   }
 }

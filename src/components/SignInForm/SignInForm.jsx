@@ -2,7 +2,6 @@ import { useState, useContext } from 'react';
 import { useNavigate } from 'react-router';
 import { signIn } from '../../services/authService';
 import { UserContext } from '../../contexts/UserContext';
-import LoginIcon from '../../assets/images/login.svg';
 import styles from './SignInForm.module.css';
 
 const SignInForm = () => {
@@ -13,6 +12,7 @@ const SignInForm = () => {
     username: '',
     password: '',
   });
+  const { username, password } = formData;
 
   const handleChange = (evt) => {
     setMessage('');
@@ -30,18 +30,20 @@ const SignInForm = () => {
     }
   };
 
+  const isFormInvalid = () => {
+    return !(username && password);
+  };
+
   return (
-    <main className={styles.container}>
-      <section>
-        <img src={LoginIcon} alt='An owl sitting on a sign' />
-      </section>
-      <section>
-        <form autoComplete='off' onSubmit={handleSubmit}>
+    <main className={styles.page}>
+      <section className={styles.formPane}>
+        <form className={styles.form} autoComplete='off' onSubmit={handleSubmit}>
           <h1>Sign In</h1>
-          <p>{message}</p>
-          <div>
-            <label htmlFor='email'>Username:</label>
+          <p className={styles.message}>{message || 'Enter your account details to continue.'}</p>
+          <div className={styles.field}>
+            <label htmlFor='username'>Username</label>
             <input
+              className={styles.input}
               type='text'
               autoComplete='off'
               id='username'
@@ -51,9 +53,10 @@ const SignInForm = () => {
               required
             />
           </div>
-          <div>
-            <label htmlFor='password'>Password:</label>
+          <div className={styles.field}>
+            <label htmlFor='password'>Password</label>
             <input
+              className={styles.input}
               type='password'
               autoComplete='off'
               id='password'
@@ -63,9 +66,17 @@ const SignInForm = () => {
               required
             />
           </div>
-          <div>
-            <button>Sign In</button>
-            <button onClick={() => navigate('/')}>Cancel</button>
+          <div className={styles.actions}>
+            <button className={styles.primaryButton} type='submit' disabled={isFormInvalid()}>
+              Sign In
+            </button>
+            <button
+              className={styles.secondaryButton}
+              type='button'
+              onClick={() => navigate('/')}
+            >
+              Cancel
+            </button>
           </div>
         </form>
       </section>
