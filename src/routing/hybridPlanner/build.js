@@ -4,6 +4,7 @@ import { filterRoutesByFerrySchedule } from "../ferrySchedule";
 import {
   coerceDate,
   compressFirstStopWait,
+  buildBaseRouteForTransitSteps,
   firstTransitStep,
   fmtDistanceMeters,
   fmtDurationSec,
@@ -11,6 +12,10 @@ import {
   getLegDeparture,
   getTransitDetailsFromStep,
   isTaxingDirect,
+  insertWaitsAndRecompute,
+  latLngKey,
+  microPairRoutes,
+  microSegmentForCombo,
   microAccessSecondsToStop,
   routeTotals,
   routeOnce,
@@ -33,6 +38,7 @@ export async function buildHybridOptions({
   const now = new Date();
 
   const accessCache = new Map();
+  const microPairCache = new Map();
 
   // ----------------------------------
   // Direct SKATE-only options (no transit)
@@ -327,6 +333,355 @@ export async function buildHybridOptions({
       .filter((s) => s.mode !== "WAIT")
       .map((s) => ({ mode: s.mode, durationText: fmtDurationSec(s.seconds) }));
 
+  const sumSeconds = (segs, endExclusive) => {
+    let s = 0;
+    const n = typeof endExclusive === "number" ? Math.max(0, Math.min(segs.length, endExclusive)) : segs.length;
+    for (let i = 0; i < n; i++) s += segs[i]?.seconds ?? 0;
+    return s;
+  };
+
+  const sumSecondsInclusive = (segs, endInclusive) => {
+    if (!Number.isFinite(endInclusive)) return sumSeconds(segs);
+    return sumSeconds(segs, endInclusive + 1);
+  };
+
+  async function buildMicroSegment({ o, d }) {
+    const pair = await microPairRoutes({ ds, origin: o, destination: d, cache: microPairCache });
+    return microSegmentForCombo({ combo, pair });
+  }
+
+  async function expandStepsToSegments({ stepList, baseResult, fallbackRoute }) {
+    const segs = [];
+    let totalDist = 0;
+    let totalSec = 0;
+
+    for (const step of stepList) {
+      const mode = step?.travel_mode;
+      if (mode === "WALKING") {
+        const o = step.start_location;
+        const d = step.end_location;
+        const seg = await buildMicroSegment({ o, d });
+        if (!seg || !Number.isFinite(seg.seconds)) continue;
+        segs.push(seg);
+        totalSec += seg.seconds;
+        totalDist += seg.distanceMeters ?? 0;
+        continue;
+      }
+
+      if (mode === "TRANSIT") {
+        const td = getTransitDetailsFromStep(step);
+        const dep = coerceDate(td?.departure_time);
+        const arr = coerceDate(td?.arrival_time);
+        const dur = step?.duration?.value ?? (arr && dep ? (arr.getTime() - dep.getTime()) / 1000 : 0);
+        const dist = step?.distance?.value ?? 0;
+        segs.push({
+          mode: "TRANSIT",
+          seconds: dur,
+          distanceMeters: dist,
+          transitDetails: td ?? null,
+          step,
+          // Fallback geometry source if step.path is missing in some Maps payloads.
+          route: fallbackRoute ?? null,
+          directionsResult: baseResult,
+        });
+        totalSec += dur;
+        totalDist += dist;
+        continue;
+      }
+
+      const dur = step?.duration?.value ?? 0;
+      const dist = step?.distance?.value ?? 0;
+      segs.push({ mode: "OTHER", seconds: dur, distanceMeters: dist, step });
+      totalSec += dur;
+      totalDist += dist;
+    }
+
+    return { segments: segs, totalDist, totalSec };
+  }
+
+  async function buildTailCutVariantsFromOption(opt) {
+    // Rule-set B: consider every TRANSIT leg <= 10 minutes.
+    // For each short leg (except first transit), cut from the *previous* transit arrival stop and ride straight to destination.
+    const segs = opt?.segments ?? [];
+    const transitIdxs = [];
+    for (let idx = 0; idx < segs.length; idx++) if (segs[idx]?.mode === "TRANSIT") transitIdxs.push(idx);
+    if (transitIdxs.length < 2) return { variants: [], dropOriginal: false };
+
+    const seen = new Set();
+    const variants = [];
+    let dropOriginal = false;
+
+    for (let ti = 0; ti < transitIdxs.length; ti++) {
+      const idx = transitIdxs[ti];
+      const tSeg = segs[idx];
+      const tDur = tSeg?.seconds ?? Infinity;
+      if (!Number.isFinite(tDur) || tDur > 10 * 60) continue;
+
+      // First transit leg: handled separately (skip-to-second logic).
+      if (ti === 0) continue;
+
+      const prevIdx = transitIdxs[ti - 1];
+      const prev = segs[prevIdx];
+      const stopLoc = prev?.transitDetails?.arrival_stop?.location ?? null;
+      const stopName = prev?.transitDetails?.arrival_stop?.name ?? "";
+      const stopKey = latLngKey(stopLoc);
+      const dedupeKey = `tail:${stopKey}`;
+      if (!stopKey || seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+
+      const prefixSec = sumSecondsInclusive(segs, prevIdx);
+      const origStretchSec = Math.max(0, (opt.durationSec ?? sumSeconds(segs)) - prefixSec);
+      if (!Number.isFinite(origStretchSec) || origStretchSec <= 0) continue;
+
+      const microSeg = await buildMicroSegment({ o: stopLoc, d: destination });
+      const newStretchSec = microSeg?.seconds ?? Infinity;
+      if (!Number.isFinite(newStretchSec) || newStretchSec === Infinity) continue;
+
+      // Gate by your rule:
+      // - Discard if > 10% slower
+      // - Keep BOTH unless >= 20% faster (new <= 0.8 * orig), in which case keep only the variant.
+      if (newStretchSec > origStretchSec * 1.1) continue;
+      if (newStretchSec <= origStretchSec * 0.8) dropOriginal = true;
+
+      const kept = segs.slice(0, prevIdx + 1);
+      const keptTransitSteps = kept.filter((s) => s?.mode === "TRANSIT" && s?.step).map((s) => s.step);
+      const glyphBaseRoute = buildBaseRouteForTransitSteps(opt.baseRoute, keptTransitSteps);
+      const stitched = [...kept, { ...microSeg, cutMeta: { fromStopName: stopName, fromStopKey: stopKey } }];
+      const rebuilt = insertWaitsAndRecompute({ departTime: opt.departTime, segments: stitched });
+      let v = {
+        kind: "HYBRID",
+        // Critical for transit glyphs: remove cut TRANSIT steps so their shields disappear.
+        baseRoute: glyphBaseRoute,
+        baseResult: opt.baseResult,
+        departTime: opt.departTime,
+        arriveTime: rebuilt.arriveTime,
+        distanceMeters: rebuilt.distanceMeters,
+        durationSec: rebuilt.durationSec,
+        summary: opt.summary,
+        segments: rebuilt.segments,
+        sidebarSegments: toSidebarSegments(rebuilt.segments),
+        cutKind: "TAIL",
+      };
+      v = compressFirstStopWait({ option: v, transitTime, now });
+      v.sidebarSegments = toSidebarSegments(v.segments);
+      variants.push(v);
+    }
+
+
+    // Also consider long transfer waits even if the upcoming transit leg is > 10 minutes.
+    // This catches the common "big wait + extra bus" pattern.
+    const WAIT_TRIGGER_SEC = 10 * 60;
+    for (let wi = 0; wi < segs.length; wi++) {
+      const s = segs[wi];
+      if (s?.mode !== "WAIT") continue;
+      const w = s?.seconds ?? 0;
+      if (!Number.isFinite(w) || w < WAIT_TRIGGER_SEC) continue;
+
+      // Ensure there's another transit after this wait (i.e., it's actually a transfer wait).
+      let nextTransit = -1;
+      for (let j = wi + 1; j < segs.length; j++) {
+        if (segs[j]?.mode === "TRANSIT") { nextTransit = j; break; }
+      }
+      if (nextTransit < 0) continue;
+
+      // Cut from the previous transit arrival stop.
+      let prevTransit = -1;
+      for (let j = wi - 1; j >= 0; j--) {
+        if (segs[j]?.mode === "TRANSIT") { prevTransit = j; break; }
+      }
+      if (prevTransit < 0) continue;
+
+      const prev = segs[prevTransit];
+      const stopLoc = prev?.transitDetails?.arrival_stop?.location ?? null;
+      const stopName = prev?.transitDetails?.arrival_stop?.name ?? "";
+      const stopKey = latLngKey(stopLoc);
+      const dedupeKey = `tail:${stopKey}`;
+      if (!stopKey || seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+
+      const prefixSec = sumSecondsInclusive(segs, prevTransit);
+      const origStretchSec = Math.max(0, (opt.durationSec ?? sumSeconds(segs)) - prefixSec);
+      if (!Number.isFinite(origStretchSec) || origStretchSec <= 0) continue;
+
+      const microSeg = await buildMicroSegment({ o: stopLoc, d: destination });
+      const newStretchSec = microSeg?.seconds ?? Infinity;
+      if (!Number.isFinite(newStretchSec) || newStretchSec === Infinity) continue;
+
+      if (newStretchSec > origStretchSec * 1.1) continue;
+      if (newStretchSec <= origStretchSec * 0.8) dropOriginal = true;
+
+      const kept = segs.slice(0, prevTransit + 1);
+      const keptTransitSteps = kept.filter((s) => s?.mode === "TRANSIT" && s?.step).map((s) => s.step);
+      const glyphBaseRoute = buildBaseRouteForTransitSteps(opt.baseRoute, keptTransitSteps);
+      const stitched = [...kept, { ...microSeg, cutMeta: { fromStopName: stopName, fromStopKey: stopKey } }];
+      const rebuilt = insertWaitsAndRecompute({ departTime: opt.departTime, segments: stitched });
+      let v = {
+        kind: "HYBRID",
+        // Critical for transit glyphs: remove cut TRANSIT steps so their shields disappear.
+        baseRoute: glyphBaseRoute,
+        baseResult: opt.baseResult,
+        departTime: opt.departTime,
+        arriveTime: rebuilt.arriveTime,
+        distanceMeters: rebuilt.distanceMeters,
+        durationSec: rebuilt.durationSec,
+        summary: opt.summary,
+        segments: rebuilt.segments,
+        sidebarSegments: toSidebarSegments(rebuilt.segments),
+        cutKind: "TAIL",
+      };
+      v = compressFirstStopWait({ option: v, transitTime, now });
+      v.sidebarSegments = toSidebarSegments(v.segments);
+      variants.push(v);
+    }
+
+    return { variants, dropOriginal };  }
+
+  async function buildFirstLegSkipVariantsFromOption(opt) {
+    // Only if the FIRST transit leg is <= 10 minutes and there is a second transit leg.
+    const segs = opt?.segments ?? [];
+    const transitIdxs = [];
+    for (let idx = 0; idx < segs.length; idx++) if (segs[idx]?.mode === "TRANSIT") transitIdxs.push(idx);
+    if (transitIdxs.length < 2) return { variants: [], dropOriginal: false };
+
+    const first = segs[transitIdxs[0]];
+    const firstDur = first?.seconds ?? Infinity;
+    if (!Number.isFinite(firstDur) || firstDur > 10 * 60) return { variants: [], dropOriginal: false };
+
+    const secondIdx = transitIdxs[1];
+    const second = segs[secondIdx];
+    const t2Stop = second?.transitDetails?.departure_stop?.location ?? null;
+    const t2Name = second?.transitDetails?.departure_stop?.name ?? "";
+    const t2Key = latLngKey(t2Stop);
+    if (!t2Stop || !t2Key) return { variants: [], dropOriginal: false };
+
+    // Access micro (origin -> second-leg boarding stop)
+    const accessSeg = await buildMicroSegment({ o: origin, d: t2Stop });
+    if (!accessSeg || !Number.isFinite(accessSeg.seconds) || accessSeg.seconds === Infinity) return { variants: [], dropOriginal: false };
+
+    // Compare the replaced PREFIX stretch: departTime -> boarding the second transit in the original
+    // vs departTime -> boarding the first transit in the variant.
+    const origSecondTransitIdx = transitIdxs[1];
+    const origStretchSec = sumSeconds(segs, origSecondTransitIdx);
+    if (!Number.isFinite(origStretchSec) || origStretchSec <= 0) return { variants: [], dropOriginal: false };
+
+    // Requery transit from the second-leg stop at the earlier arrival time.
+    const arriveAtStop = new Date((opt.departTime?.getTime?.() ?? now.getTime()) + accessSeg.seconds * 1000);
+    const remReq = {
+      origin: t2Stop,
+      destination,
+      travelMode: "TRANSIT",
+      provideRouteAlternatives: true,
+      transitOptions: undefined,
+    };
+
+    if (kind === "ARRIVE_BY" && tDate) remReq.transitOptions = { arrivalTime: tDate };
+    else remReq.transitOptions = { departureTime: arriveAtStop < now ? now : arriveAtStop };
+
+    let remResult = null;
+    try {
+      remResult = await routeOnce(ds, remReq);
+    } catch {
+      remResult = null;
+    }
+
+    const remRoutes = (remResult?.routes ?? []).filter(Boolean).slice(0, 2);
+
+    const variants = [];
+    let dropOriginal = false;
+
+    const seen = new Set();
+
+    async function considerVariantFromRemainder(remRoute) {
+      // Dedupe by transit signature so two alternatives that are effectively the same don't double-populate.
+      const sig = routeSignature(remRoute);
+      if (sig && seen.has(sig)) return;
+      if (sig) seen.add(sig);
+
+      let remainderSegments = [];
+      if (remRoute?.legs?.[0]?.steps?.length) {
+        const expanded = await expandStepsToSegments({
+          stepList: remRoute.legs[0].steps,
+          baseResult: remResult,
+          fallbackRoute: remRoute,
+        });
+        remainderSegments = expanded.segments;
+      }
+
+      // If transit remainder is unavailable, allow a transit-less option by just riding/walking to destination.
+      if (!remainderSegments.length) {
+        const directSeg = await buildMicroSegment({ o: origin, d: destination });
+        if (!directSeg || !Number.isFinite(directSeg.seconds) || directSeg.seconds === Infinity) return;
+
+        const rebuiltDirect = insertWaitsAndRecompute({ departTime: opt.departTime, segments: [directSeg] });
+        let v = {
+          kind: "HYBRID",
+          // No transit legs in this variant → ensure we do NOT keep transit glyphs.
+          baseRoute: null,
+          baseResult: null,
+          departTime: opt.departTime,
+          arriveTime: rebuiltDirect.arriveTime,
+          distanceMeters: rebuiltDirect.distanceMeters,
+          durationSec: rebuiltDirect.durationSec,
+          summary: opt.summary,
+          segments: rebuiltDirect.segments,
+          sidebarSegments: toSidebarSegments(rebuiltDirect.segments),
+          cutKind: "FIRST_LEG_SKIP",
+          cutMeta: { toStopName: t2Name, toStopKey: t2Key },
+        };
+        v = compressFirstStopWait({ option: v, transitTime, now });
+        v.sidebarSegments = toSidebarSegments(v.segments);
+
+        const newStretchSec = v.durationSec ?? sumSeconds(v.segments ?? []);
+        if (!Number.isFinite(newStretchSec)) return;
+        if (newStretchSec > origStretchSec * 1.1) return;
+        if (newStretchSec <= origStretchSec * 0.8) dropOriginal = true;
+        variants.push(v);
+        return;
+      }
+
+      const stitched = [{ ...accessSeg, cutMeta: { toStopName: t2Name, toStopKey: t2Key } }, ...remainderSegments];
+      const rebuilt = insertWaitsAndRecompute({ departTime: opt.departTime, segments: stitched });
+      let v = {
+        kind: "HYBRID",
+        // Glyphs should reflect the re-queried remainder transit route(s), not the original route we cut.
+        baseRoute: remRoute ?? null,
+        baseResult: remResult ?? null,
+        departTime: opt.departTime,
+        arriveTime: rebuilt.arriveTime,
+        distanceMeters: rebuilt.distanceMeters,
+        durationSec: rebuilt.durationSec,
+        summary: opt.summary,
+        segments: rebuilt.segments,
+        sidebarSegments: toSidebarSegments(rebuilt.segments),
+        cutKind: "FIRST_LEG_SKIP",
+        cutMeta: { toStopName: t2Name, toStopKey: t2Key },
+      };
+      v = compressFirstStopWait({ option: v, transitTime, now });
+      v.sidebarSegments = toSidebarSegments(v.segments);
+
+      const vSegs = v.segments ?? [];
+      const vFirstTransitIdx = vSegs.findIndex((s) => s?.mode === "TRANSIT");
+      const newStretchSec = vFirstTransitIdx >= 0 ? sumSeconds(vSegs, vFirstTransitIdx) : (v.durationSec ?? sumSeconds(vSegs));
+
+      if (!Number.isFinite(newStretchSec)) return;
+      if (newStretchSec > origStretchSec * 1.1) return;
+      if (newStretchSec <= origStretchSec * 0.8) dropOriginal = true;
+      variants.push(v);
+    }
+
+    if (!remRoutes.length) {
+      // No remainder transit found; still allow a transit-less variant.
+      await considerVariantFromRemainder(null);
+    } else {
+      for (const r of remRoutes) await considerVariantFromRemainder(r);
+    }
+
+    return { variants, dropOriginal };
+  }
+
+  // Direct no-transit options
+
+
   // Direct no-transit options
   const directBikeCandidates = bikeRoutes.slice(0, 3).map((r) => {
     const { dist, dur } = routeTotals(r);
@@ -419,56 +774,15 @@ export async function buildHybridOptions({
         const o = step.start_location;
         const d = step.end_location;
 
-        // Query both walk + bike so cyclists can walk bikes, and skaters can use both geometries.
-        const [walkRes, bikeResLeg] = await Promise.all([
-          routeOnce(ds, { origin: o, destination: d, travelMode: "WALKING", provideRouteAlternatives: false }),
-          routeOnce(ds, { origin: o, destination: d, travelMode: "BICYCLING", provideRouteAlternatives: false }),
-        ]);
+        // Cached WALK+BIKE pair; then choose the faster (bike riders can walk bikes; skaters can use either geometry).
+        const pair = await microPairRoutes({ ds, origin: o, destination: d, cache: microPairCache });
+        const seg = microSegmentForCombo({ combo, pair });
+        if (!seg || !Number.isFinite(seg.seconds)) continue;
 
-        const wRoute = walkRes?.routes?.[0] ?? null;
-        const bRoute = bikeResLeg?.routes?.[0] ?? null;
-        const w = wRoute ? routeTotals(wRoute) : { dist: 0, dur: Infinity };
-        const b = bRoute ? routeTotals(bRoute) : { dist: 0, dur: Infinity };
-
-        if (combo === ROUTE_COMBO.TRANSIT_BIKE) {
-          const useBike = b.dur <= w.dur;
-          const chosen = useBike ? bRoute : wRoute;
-          const chosenRes = useBike ? bikeResLeg : walkRes;
-          const chosenDur = useBike ? b.dur : w.dur;
-          const chosenDist = useBike ? b.dist : w.dist;
-          segments.push({
-            mode: useBike ? "BIKE" : "WALK",
-            seconds: chosenDur,
-            distanceMeters: chosenDist,
-            route: chosen,
-            directionsResult: chosenRes,
-          });
-          totalSec += chosenDur;
-          totalDist += chosenDist;
-          currentTime = new Date(currentTime.getTime() + chosenDur * 1000);
-          continue;
-        }
-
-        // TRANSIT_SKATE
-        const wSkate = skateSecondsFromWalkSeconds(w.dur);
-        const bSkate = skateSecondsFromGoogleBikeSeconds(b.dur);
-        const useBike = bSkate <= wSkate;
-        const chosen = useBike ? bRoute : wRoute;
-        const chosenRes = useBike ? bikeResLeg : walkRes;
-        const chosenSec = useBike ? bSkate : wSkate;
-        const chosenDist = useBike ? b.dist : w.dist;
-
-        segments.push({
-          mode: "SKATE",
-          seconds: chosenSec,
-          distanceMeters: chosenDist,
-          route: chosen,
-          directionsResult: chosenRes,
-          skateGeometryMode: useBike ? "BICYCLING" : "WALKING",
-        });
-        totalSec += chosenSec;
-        totalDist += chosenDist;
-        currentTime = new Date(currentTime.getTime() + chosenSec * 1000);
+        segments.push(seg);
+        totalSec += seg.seconds;
+        totalDist += seg.distanceMeters ?? 0;
+        currentTime = new Date(currentTime.getTime() + seg.seconds * 1000);
         continue;
       }
 
@@ -533,7 +847,31 @@ export async function buildHybridOptions({
     // so we don't show "leave earlier just to wait at the first stop".
     opt = compressFirstStopWait({ option: opt, transitTime, now });
     opt.sidebarSegments = toSidebarSegments(opt.segments);
-    options.push(opt);
+
+    // --- Hybrid refinement: replace "short" transit legs (<= 10 min) with direct micro-mobility when competitive.
+    // Rules (per your latest):
+    // - Keep the cut variant if newStretch <= origStretch * 1.10
+    // - If newStretch <= origStretch * 0.80, drop the original route entirely
+    // - Otherwise, keep BOTH (sorting + slice(0, maxOptions) will decide)
+
+    const variants = [];
+    let dropOriginal = false;
+
+    // First-transit short leg: try skipping everything up to the *second* transit leg,
+    // then requery transit from that stop at the earlier arrival time.
+    const firstSkip = await buildFirstLegSkipVariantsFromOption(opt);
+    if (firstSkip?.variants?.length) {
+      variants.push(...firstSkip.variants);
+      if (firstSkip.dropOriginal) dropOriginal = true;
+    }
+
+    // Non-first short legs: cut from previous transit arrival stop to destination.
+    const tailCuts = await buildTailCutVariantsFromOption(opt);
+    if (tailCuts?.variants?.length) variants.push(...tailCuts.variants);
+    if (tailCuts?.dropOriginal) dropOriginal = true;
+
+    if (!dropOriginal) options.push(opt);
+    for (const v of variants) options.push(v);
   }
 
   // Include direct option unless taxing AND we already have enough other options.

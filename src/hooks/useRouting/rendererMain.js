@@ -1,4 +1,20 @@
 export function createMainRendererTools({ rendererRef, panelRef, map }) {
+  function inferRendererTravelMode(dr) {
+    try {
+      const mode = dr?.getDirections?.()?.request?.travelMode;
+      if (typeof mode === "string" && mode) return mode;
+    } catch {
+      // ignore
+    }
+    try {
+      const mode = dr?.getDirections?.()?.routes?.[0]?.travelMode;
+      if (typeof mode === "string" && mode) return mode;
+    } catch {
+      // ignore
+    }
+    return "TRANSIT";
+  }
+
   function clearRendererDirections(dr) {
     if (!dr) return;
 
@@ -14,14 +30,13 @@ export function createMainRendererTools({ rendererRef, panelRef, map }) {
     } catch {
       // ignore
     }
+    const cleared = {
+      routes: [],
+      // Some Maps JS builds assume directions.request.travelMode exists.
+      request: { travelMode: inferRendererTravelMode(dr) },
+    };
     try {
-      if (typeof dr.setDirections === "function") dr.setDirections({ routes: [] });
-    } catch {
-      // ignore
-    }
-    // Best-effort: also clear the underlying MVCObject prop if supported.
-    try {
-      dr.set?.("directions", { routes: [] });
+      if (typeof dr.setDirections === "function") dr.setDirections(cleared);
     } catch {
       // ignore
     }

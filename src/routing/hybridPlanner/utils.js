@@ -130,6 +130,103 @@ function latLngKey(ll) {
   }
 }
 
+function locationKey(loc) {
+  // Stable-ish key for caching DirectionsService legs.
+  // Accepts strings (addresses), LatLng / LatLngLiteral, and Place-like objects.
+  try {
+    if (!loc) return "";
+    if (typeof loc === "string") return `str:${loc}`;
+
+    // PlaceId-like
+    const placeId = loc?.placeId ?? loc?.place_id ?? null;
+    if (placeId) return `place:${placeId}`;
+
+    // LatLng / LatLngLiteral
+    const llk = latLngKey(loc);
+    if (llk) return `ll:${llk}`;
+
+    // Fallback: try to serialize a tiny subset
+    const name = loc?.name ? String(loc.name) : "";
+    if (name) return `obj:${name}`;
+    return "obj:" + JSON.stringify(loc).slice(0, 80);
+  } catch {
+    return "";
+  }
+}
+
+async function microPairRoutes({ ds, origin, destination, cache }) {
+  // Cache the pair of WALKING + BICYCLING routes for a given start/end.
+  const key = `${locationKey(origin)}->${locationKey(destination)}`;
+  if (key && cache?.has(key)) return cache.get(key);
+
+  const pair = {
+    walkRes: null,
+    walkRoute: null,
+    walkTot: { dist: 0, dur: Infinity },
+    bikeRes: null,
+    bikeRoute: null,
+    bikeTot: { dist: 0, dur: Infinity },
+  };
+
+  const [walkRes, bikeRes] = await Promise.all([
+    routeOnce(ds, { origin, destination, travelMode: "WALKING", provideRouteAlternatives: false }).catch(() => null),
+    routeOnce(ds, { origin, destination, travelMode: "BICYCLING", provideRouteAlternatives: false }).catch(() => null),
+  ]);
+
+  pair.walkRes = walkRes;
+  pair.bikeRes = bikeRes;
+
+  pair.walkRoute = walkRes?.routes?.[0] ?? null;
+  pair.bikeRoute = bikeRes?.routes?.[0] ?? null;
+  if (pair.walkRoute) pair.walkTot = routeTotals(pair.walkRoute);
+  if (pair.bikeRoute) pair.bikeTot = routeTotals(pair.bikeRoute);
+
+  if (key && cache) cache.set(key, pair);
+  return pair;
+}
+
+function microSegmentForCombo({ combo, pair }) {
+  const w = pair?.walkTot ?? { dist: 0, dur: Infinity };
+  const b = pair?.bikeTot ?? { dist: 0, dur: Infinity };
+  const wRoute = pair?.walkRoute ?? null;
+  const bRoute = pair?.bikeRoute ?? null;
+  const wRes = pair?.walkRes ?? null;
+  const bRes = pair?.bikeRes ?? null;
+
+  if (combo === ROUTE_COMBO.TRANSIT_BIKE) {
+    const useBike = b.dur <= w.dur;
+    const chosen = useBike ? bRoute : wRoute;
+    const chosenRes = useBike ? bRes : wRes;
+    const chosenDur = useBike ? b.dur : w.dur;
+    const chosenDist = useBike ? b.dist : w.dist;
+    return {
+      mode: useBike ? "BIKE" : "WALK",
+      seconds: chosenDur,
+      distanceMeters: chosenDist,
+      route: chosen,
+      directionsResult: chosenRes,
+    };
+  }
+
+  // TRANSIT_SKATE
+  const wSkate = skateSecondsFromWalkSeconds(w.dur);
+  const bSkate = skateSecondsFromGoogleBikeSeconds(b.dur);
+  const useBike = bSkate <= wSkate;
+  const chosen = useBike ? bRoute : wRoute;
+  const chosenRes = useBike ? bRes : wRes;
+  const chosenSec = useBike ? bSkate : wSkate;
+  const chosenDist = useBike ? b.dist : w.dist;
+
+  return {
+    mode: "SKATE",
+    seconds: chosenSec,
+    distanceMeters: chosenDist,
+    route: chosen,
+    directionsResult: chosenRes,
+    skateGeometryMode: useBike ? "BICYCLING" : "WALKING",
+  };
+}
+
 function firstTransitStep(route) {
   const steps = route?.legs?.[0]?.steps ?? [];
   for (let i = 0; i < steps.length; i++) {
@@ -320,6 +417,65 @@ function skateSecondsFromWalkSeconds(walkSec) {
   return walkSec * (WALK_MPH / SKATE_MPH_FLAT);
 }
 
+// --- Transit glyph support -------------------------------------------------
+// In hybrid modes we keep a DirectionsRenderer around for Google's transit
+// route shields/labels. If we synthesize hybrid variants that REMOVE some
+// transit legs, we must also provide a baseRoute that no longer contains those
+// removed TRANSIT steps; otherwise the renderer will still draw shields for the
+// cut lines.
+function cloneWithDescriptors(obj) {
+  if (!obj) return obj;
+  try {
+    return Object.create(
+      Object.getPrototypeOf(obj),
+      Object.getOwnPropertyDescriptors(obj)
+    );
+  } catch {
+    try {
+      return Object.assign(Object.create(Object.getPrototypeOf(obj)), obj);
+    } catch {
+      return obj;
+    }
+  }
+}
+
+function buildBaseRouteForTransitSteps(templateRoute, transitSteps) {
+  try {
+    if (!templateRoute) return null;
+    const route = templateRoute;
+    const legs = route?.legs ?? [];
+    if (!legs.length) return route;
+
+    const leg0 = legs[0];
+    const steps = Array.isArray(transitSteps) ? transitSteps.filter(Boolean) : [];
+    if (!steps.length) return null;
+
+    const newLeg0 = cloneWithDescriptors(leg0);
+    newLeg0.steps = steps;
+
+    // Keep leg start/end coherent so the renderer doesn't try to connect gaps.
+    const firstT = steps[0];
+    const lastT = steps[steps.length - 1];
+    if (firstT?.start_location) newLeg0.start_location = firstT.start_location;
+    if (lastT?.end_location) newLeg0.end_location = lastT.end_location;
+
+    // Aggregate duration/distance (not strictly needed for glyphs, but avoids odd UI).
+    const dist = steps.reduce((sum, s) => sum + (s?.distance?.value ?? 0), 0);
+    const dur = steps.reduce((sum, s) => sum + (s?.duration?.value ?? 0), 0);
+    if (Number.isFinite(dist)) newLeg0.distance = { ...(newLeg0.distance ?? {}), value: dist };
+    if (Number.isFinite(dur)) newLeg0.duration = { ...(newLeg0.duration ?? {}), value: dur };
+
+    const newRoute = cloneWithDescriptors(route);
+    newRoute.legs = [newLeg0, ...legs.slice(1)];
+
+    // Keep original bounds to avoid unexpected viewport jumps.
+    newRoute.bounds = route.bounds;
+    return newRoute;
+  } catch {
+    return templateRoute;
+  }
+}
+
 
 // Export shared helpers/constants for split modules
-export { ALT_GRAY, BIKE_MPH_ASSUMED, GOOGLE_BLUE, MPH_TO_MPS, SKATE_MPH_DOWNHILL_CAP, SKATE_MPH_FLAT, SKATE_MPS_CAP, SKATE_MPS_FLAT, SKATE_UPHILL_COLLAPSE_DEG, WALK_MPH, WALK_MPS, coerceDate, compressFirstStopWait, firstTransitStep, fmtDistanceMeters, fmtDurationSec, fmtTime, getLegArrival, getLegDeparture, getTransitDetailsFromStep, insertWaitsAndRecompute, isTaxingDirect, latLngKey, microAccessSecondsToStop, routeOnce, routeSignature, routeTotals, skateSecondsFromGoogleBikeSeconds, skateSecondsFromWalkSeconds, walkAccessSecondsToFirstTransit };
+export { ALT_GRAY, BIKE_MPH_ASSUMED, GOOGLE_BLUE, MPH_TO_MPS, SKATE_MPH_DOWNHILL_CAP, SKATE_MPH_FLAT, SKATE_MPS_CAP, SKATE_MPS_FLAT, SKATE_UPHILL_COLLAPSE_DEG, WALK_MPH, WALK_MPS, buildBaseRouteForTransitSteps, coerceDate, compressFirstStopWait, firstTransitStep, fmtDistanceMeters, fmtDurationSec, fmtTime, getLegArrival, getLegDeparture, getTransitDetailsFromStep, insertWaitsAndRecompute, isTaxingDirect, latLngKey, locationKey, microAccessSecondsToStop, microPairRoutes, microSegmentForCombo, routeOnce, routeSignature, routeTotals, skateSecondsFromGoogleBikeSeconds, skateSecondsFromWalkSeconds, walkAccessSecondsToFirstTransit };
