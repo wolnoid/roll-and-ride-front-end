@@ -1,6 +1,6 @@
 # Roll & Ride
 
-![Roll & Ride logo](src/assets/images/logo1.png)
+![Roll & Ride screenshot](public/Screenshot.jpeg)
 
 ### Description
 **Roll & Ride** is a directions app optimized for bringing your bike or skateboard on public transit — using a multimodal route algorithm that combines public transit with bike/skate legs. The core idea is simple: get Google-quality routing, but tuned for riders who care about mode switches, last‑mile practicality, and shareable route links.
